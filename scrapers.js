@@ -584,6 +584,239 @@ async function scrapeRuTracker(query) {
   } catch (e) { console.warn(`[RuTrk] ${e.message}`); return []; }
 }
 
+
+// ══════════════════════════════════════════════════════════════════════════════
+// 14. EXT.to — novo indexador JSON, substituto do TorrentGalaxy
+// ══════════════════════════════════════════════════════════════════════════════
+async function scrapeEXT(query) {
+  try {
+    const { data } = await httpJson.get(
+      `https://ext.to/api/v1/search?q=${encodeURIComponent(query)}&sort=seeders&order=desc`
+    );
+    const list = data?.results || data?.torrents || (Array.isArray(data) ? data : []);
+    if (!list.length) return [];
+    const streams = list.slice(0, 15).map(t => {
+      const hash = t.hash || t.infohash || t.info_hash || hashFromMagnet(t.magnet);
+      return makeStream({
+        source:   "EXT",
+        title:    t.name || t.title,
+        quality:  extractQuality(t.name || t.title),
+        codec:    extractCodec(t.name || t.title),
+        audio:    extractAudio(t.name || t.title),
+        seeders:  t.seeders || t.seeds || 0,
+        leechers: t.leechers || t.peers || 0,
+        infoHash: hash,
+        magnet:   t.magnet || (hash ? buildMagnet(hash, t.name) : null),
+        size:     t.size || null,
+      });
+    }).filter(s => s.infoHash || s.magnet);
+    console.log(`[EXT] ${streams.length}`);
+    return streams;
+  } catch (e) { console.warn(`[EXT] ${e.message}`); return []; }
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// 15. RARGB (rargb.to) — clone pós-shutdown do RARBG original
+// ══════════════════════════════════════════════════════════════════════════════
+async function scrapeRARGB(query) {
+  const mirrors = [
+    "https://rargb.to",
+    "https://www.rargb.to",
+    "https://rarbg.to",
+  ];
+  return tryMirrors(mirrors, async (base) => {
+    const { data } = await http.get(
+      `${base}/search/?search=${encodeURIComponent(query)}&order=seeders&by=DESC`,
+      { headers: { "Referer": base + "/" } }
+    );
+    const $ = cheerio.load(data);
+    const streams = [];
+    $("tr.lista2").slice(0, 12).each((_, row) => {
+      const nameEl = $(row).find("td:nth-child(2) a");
+      const name   = nameEl.text().trim();
+      const magnet = $(row).find('a[href^="magnet:"]').attr("href");
+      if (!name || !magnet) return;
+      const seeders = parseNum($(row).find("td:nth-child(6)").text());
+      const size    = $(row).find("td:nth-child(4)").text().trim();
+      streams.push(makeStream({
+        source: "RARGB", title: name,
+        quality: extractQuality(name), codec: extractCodec(name), audio: extractAudio(name),
+        seeders, infoHash: hashFromMagnet(magnet), magnet, size,
+      }));
+    });
+    console.log(`[RARGB] ${streams.length}`);
+    return streams;
+  });
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// 16. Torlock — torrents verificados, sem fakes
+// ══════════════════════════════════════════════════════════════════════════════
+async function scrapeTorlock(query) {
+  const mirrors = [
+    "https://www.torlock.com",
+    "https://torlock2.com",
+  ];
+  return tryMirrors(mirrors, async (base) => {
+    const { data } = await http.get(
+      `${base}/all/torrents/${encodeURIComponent(query)}.html?sort=seeds`
+    );
+    const $ = cheerio.load(data);
+    const items = [];
+    $("table.table tbody tr").slice(0, 8).each((_, row) => {
+      const a    = $(row).find("td a.n").first();
+      const href = a.attr("href");
+      if (!href) return;
+      items.push({
+        href:    `${base}${href}`,
+        name:    a.text().trim(),
+        seeders: parseNum($(row).find("td.tds").text()),
+        size:    $(row).find("td.tds1").text().trim(),
+      });
+    });
+    const streams = (await Promise.all(items.slice(0, 5).map(async item => {
+      try {
+        const { data: d } = await http.get(item.href, { headers: { "Referer": base + "/" } });
+        const mag = cheerio.load(d)('a[href^="magnet:"]').attr("href");
+        if (!mag) return null;
+        return makeStream({
+          source: "Torlock", title: item.name,
+          quality: extractQuality(item.name), codec: extractCodec(item.name), audio: extractAudio(item.name),
+          seeders: item.seeders, infoHash: hashFromMagnet(mag), magnet: mag, size: item.size,
+        });
+      } catch { return null; }
+    }))).filter(Boolean);
+    console.log(`[Torlock] ${streams.length}`);
+    return streams;
+  });
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// 17. SpeedTorrent — site brasileiro de torrents
+// ══════════════════════════════════════════════════════════════════════════════
+async function scrapeSpeedTorrent(query) {
+  const mirrors = [
+    "https://www.speedtorrent.app",
+    "https://speedtorrent.net",
+  ];
+  return tryMirrors(mirrors, async (base) => {
+    const { data } = await http.get(
+      `${base}/busca/${encodeURIComponent(query)}`
+    );
+    const $ = cheerio.load(data);
+    const streams = [];
+    $(".torrent-item, .result-item, tr.torrent").slice(0, 10).each((_, el) => {
+      const magnet = $(el).find('a[href^="magnet:"]').attr("href");
+      const name   = $(el).find(".torrent-name, .name, td a").first().text().trim();
+      if (!magnet || !name) return;
+      const seeders = parseNum($(el).find(".seeds, .seeders").text());
+      const size    = $(el).find(".size").text().trim();
+      streams.push(makeStream({
+        source: "SpeedTR", title: name,
+        quality: extractQuality(name), codec: extractCodec(name), audio: extractAudio(name),
+        seeders, infoHash: hashFromMagnet(magnet), magnet, size,
+      }));
+    });
+    console.log(`[SpeedTR] ${streams.length}`);
+    return streams;
+  });
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// 18. TorrentDownloads — grande acervo geral
+// ══════════════════════════════════════════════════════════════════════════════
+async function scrapeTorrentDownloads(query) {
+  try {
+    const { data } = await http.get(
+      `https://www.torrentdownloads.pro/search/?search=${encodeURIComponent(query)}`
+    );
+    const $ = cheerio.load(data);
+    const links = [];
+    $(".tor_row .tor_title a, .torrents_table a.title").slice(0, 8).each((_, el) => {
+      const href = $(el).attr("href");
+      if (href) links.push({ href: "https://www.torrentdownloads.pro" + href, name: $(el).text().trim() });
+    });
+    const streams = (await Promise.all(links.map(async item => {
+      try {
+        const { data: d } = await http.get(item.href);
+        const $d   = cheerio.load(d);
+        const mag  = $d('a[href^="magnet:"]').attr("href");
+        if (!mag) return null;
+        return makeStream({
+          source: "TDL", title: item.name,
+          quality: extractQuality(item.name), codec: extractCodec(item.name), audio: extractAudio(item.name),
+          seeders: parseNum($d(".seeds, .tseed").first().text()),
+          infoHash: hashFromMagnet(mag), magnet: mag,
+          size: $d(".cate_size, .tsize").first().text().trim(),
+        });
+      } catch { return null; }
+    }))).filter(Boolean);
+    console.log(`[TDL] ${streams.length}`);
+    return streams;
+  } catch (e) { console.warn(`[TDL] ${e.message}`); return []; }
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// 19. Kickass Torrents — clássico
+// ══════════════════════════════════════════════════════════════════════════════
+async function scrapeKickass(query) {
+  const mirrors = [
+    "https://kickasstorrents.to",
+    "https://katcr.to",
+    "https://kickass.cm",
+  ];
+  return tryMirrors(mirrors, async (base) => {
+    const { data } = await http.get(`${base}/usearch/${encodeURIComponent(query)}/`);
+    const $ = cheerio.load(data);
+    const streams = [];
+    $("tr.odd, tr.even").slice(0, 10).each((_, row) => {
+      const magnet  = $(row).find('a[href^="magnet:"]').attr("href");
+      if (!magnet) return;
+      const name    = $(row).find("a.cellMainLink").text().trim();
+      const seeders = parseNum($(row).find("td.green").first().text());
+      const size    = $(row).find("td.nobr").first().text().trim();
+      streams.push(makeStream({
+        source: "KAT", title: name,
+        quality: extractQuality(name), codec: extractCodec(name), audio: extractAudio(name),
+        seeders, leechers: parseNum($(row).find("td.red").first().text()),
+        infoHash: hashFromMagnet(magnet), magnet, size,
+      }));
+    });
+    console.log(`[KAT] ${streams.length}`);
+    return streams;
+  });
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// 20. Zooqle — bom acervo de filmes/séries
+// ══════════════════════════════════════════════════════════════════════════════
+async function scrapeZooqle(query) {
+  try {
+    const { data } = await http.get(
+      `https://zooqle.com/search?q=${encodeURIComponent(query)}&s=ns&v=t&sd=d&fmt=rss`
+    );
+    const $ = cheerio.load(data, { xmlMode: true });
+    const streams = [];
+    $("item").slice(0, 12).each((_, el) => {
+      const name   = $(el).find("title").text().trim();
+      const magnet = $(el).find("torrent\:magnetURI, magnetURI").text().trim()
+                  || $(el).find("link").text().trim();
+      if (!name) return;
+      const seeders = parseNum($(el).find("torrent\:seeds, seeds").text());
+      const size    = $(el).find("torrent\:contentLength, contentLength").text().trim();
+      const sizeGB  = size ? `${(parseInt(size) / 1e9).toFixed(2)} GB` : null;
+      if (!magnet || !magnet.startsWith("magnet:")) return;
+      streams.push(makeStream({
+        source: "Zooqle", title: name,
+        quality: extractQuality(name), codec: extractCodec(name), audio: extractAudio(name),
+        seeders, infoHash: hashFromMagnet(magnet), magnet, size: sizeGB,
+      }));
+    });
+    console.log(`[Zooqle] ${streams.length}`);
+    return streams;
+  } catch (e) { console.warn(`[Zooqle] ${e.message}`); return []; }
+}
+
 // ══════════════════════════════════════════════════════════════════════════════
 // MASTER
 // ══════════════════════════════════════════════════════════════════════════════
@@ -625,7 +858,7 @@ async function scrapeAll(imdbId, isSeries, season, episode) {
   console.log(`\n[Rasto] "${query}" | ${imdbId}`);
 
   const tasks = [
-    // APIs JSON — mais confiáveis de servidor
+    // ── APIs JSON (mais confiáveis de servidor) ───────────────────────
     isSeries ? scrapeEZTV(imdbId, season, episode) : scrapeYTS(imdbId),
     scrapePirateBay(query),
     scrapeKnaben(query),
@@ -633,12 +866,19 @@ async function scrapeAll(imdbId, isSeries, season, episode) {
     scrapeBitsearch(query),
     scrapeSolidtorrents(query),
     scrapeSnowfl(query),
-    // HTML scrapers
+    scrapeEXT(query),
+    // ── HTML scrapers ─────────────────────────────────────────────────
     scrapeTorrentGalaxy(query),
     scrape1337x(query),
     scrapeLimeTorrents(query),
     scrapeNyaa(query),
     scrapeRuTracker(query),
+    scrapeRARGB(query),
+    scrapeTorlock(query),
+    scrapeSpeedTorrent(query),
+    scrapeTorrentDownloads(query),
+    scrapeKickass(query),
+    scrapeZooqle(query),
   ];
 
   const results = await Promise.allSettled(tasks);
