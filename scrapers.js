@@ -6,7 +6,8 @@
 const axios   = require("axios");
 const cheerio = require("cheerio");
 
-const TIMEOUT = 12000;
+const TIMEOUT = 7000;
+const SOURCE_TIMEOUT = 8500;
 
 const http = axios.create({
   timeout: TIMEOUT,
@@ -92,6 +93,29 @@ function sizeFromText(value) {
   return cleanText(value).match(/\d+(?:[.,]\d+)?\s*(?:TB|GB|MB|KB|TiB|GiB|MiB|KiB)/i)?.[0] || "";
 }
 
+function normalizeSearchText(value) {
+  return cleanText(value)
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function titleTokens(title) {
+  const ignored = new Set(["the", "and", "for", "with", "from", "uma", "uns", "das", "dos"]);
+  const tokens = normalizeSearchText(title).split(" ").filter(Boolean);
+  const longTokens = tokens.filter(t => t.length > 2 && !ignored.has(t));
+  return longTokens.length ? longTokens : tokens.filter(t => !ignored.has(t));
+}
+
+function matchesTitle(stream, title) {
+  const tokens = titleTokens(title);
+  if (!tokens.length) return true;
+  const haystack = normalizeSearchText(`${stream.name} ${stream.title}`);
+  return tokens.every(token => haystack.includes(token));
+}
+
 function pickTorrentLink($, root, config) {
   const selector = config.linkSelector || "a";
   const anchors = $(root).find(selector).toArray().map(a => {
@@ -148,6 +172,18 @@ async function scrapeSearchSite(source, configs) {
   return [];
 }
 
+function withTimeout(label, promise) {
+  let timer;
+  const timeout = new Promise(resolve => {
+    timer = setTimeout(() => {
+      console.warn(`[${label}] skipped after ${SOURCE_TIMEOUT}ms`);
+      resolve([]);
+    }, SOURCE_TIMEOUT);
+  });
+
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
 function buildStream(source, title, q, seeds, hash, size) {
   const h = validHash(hash);
   if (!h) return null;
@@ -173,22 +209,6 @@ function buildStream(source, title, q, seeds, hash, size) {
 // ──────────────────────────────────────────────────────────────────────────
 // Scrapers
 // ──────────────────────────────────────────────────────────────────────────
-
-async function yts(imdbId) {
-  try {
-    const { data } = await http.get(`https://yts.mx/api/v2/list_movies.json?query_term=${imdbId}&limit=10`);
-    if (!data?.data?.movies?.length) return [];
-    const out = [];
-    for (const m of data.data.movies) {
-      for (const t of (m.torrents || [])) {
-        const s = buildStream("YTS", m.title_long, t.quality, t.seeds, t.hash, t.size);
-        if (s) out.push(s);
-      }
-    }
-    console.log(`[YTS] ${out.length}`);
-    return out;
-  } catch (e) { console.warn(`[YTS] ${e.message}`); return []; }
-}
 
 async function eztv(imdbId, season, episode) {
   const id = imdbId.replace("tt","");
@@ -277,35 +297,6 @@ async function knaben(query) {
   } catch (e) { console.warn(`[Knaben] ${e.message}`); return []; }
 }
 
-async function x1337(query) {
-  try {
-    const base = "https://1337x.to";
-    const { data } = await http.get(`${base}/search/${encodeURIComponent(query)}/1/`);
-    const $ = cheerio.load(data);
-    const rows = $("table.table-list tbody tr").toArray().slice(0,6);
-    if (!rows.length) return [];
-
-    const items = rows.map(r => ({
-      href:  base + ($(r).find("td.name a").eq(1).attr("href")||""),
-      name:  $(r).find("td.name a").eq(1).text().trim(),
-      seeds: +$(r).find("td.seeds").text().replace(/\D/g,"") || 0,
-      size:  $(r).find("td.size").text().trim().split("\n")[0],
-    })).filter(i => i.href && i.name);
-
-    const out = (await Promise.all(items.map(async i => {
-      try {
-        const { data: d } = await http.get(i.href);
-        const mag = cheerio.load(d)('a[href^="magnet:"]').attr("href");
-        if (!mag) return null;
-        return buildStream("1337x", i.name, quality(i.name), i.seeds, hashFromMagnet(mag), i.size);
-      } catch { return null; }
-    }))).filter(Boolean);
-
-    console.log(`[1337x] ${out.length}`);
-    return out;
-  } catch (e) { console.warn(`[1337x] ${e.message}`); return []; }
-}
-
 async function nyaa(query) {
   try {
     const { data } = await http.get(`https://nyaa.si/?page=rss&q=${encodeURIComponent(query)}&s=seeders&o=desc`);
@@ -321,32 +312,6 @@ async function nyaa(query) {
     console.log(`[Nyaa] ${out.length}`);
     return out;
   } catch (e) { console.warn(`[Nyaa] ${e.message}`); return []; }
-}
-
-async function torrentGalaxy(query) {
-  const q = encodeURIComponent(query);
-  return scrapeSearchSite("TorrentGalaxy", [
-    {
-      url: `https://torrentgalaxy.to/torrents.php?search=${q}&sort=seeders&order=desc`,
-      rowSelector: ".tgxtablerow, table tr",
-      linkSelector: 'a[href*="/torrent/"]',
-      titleSelectors: ['a[href*="/torrent/"]'],
-      seedSelectors: [".tgxtablecell:nth-child(11)", "td:nth-child(11)"],
-      sizeSelectors: [".tgxtablecell:nth-child(8)", "td:nth-child(8)"],
-      limit: 6,
-      matchLink: href => /\/torrent\//i.test(href),
-    },
-    {
-      url: `https://tgx.rs/torrents.php?search=${q}&sort=seeders&order=desc`,
-      rowSelector: ".tgxtablerow, table tr",
-      linkSelector: 'a[href*="/torrent/"]',
-      titleSelectors: ['a[href*="/torrent/"]'],
-      seedSelectors: [".tgxtablecell:nth-child(11)", "td:nth-child(11)"],
-      sizeSelectors: [".tgxtablecell:nth-child(8)", "td:nth-child(8)"],
-      limit: 6,
-      matchLink: href => /\/torrent\//i.test(href),
-    },
-  ]);
 }
 
 async function limeTorrents(query) {
@@ -375,32 +340,6 @@ async function limeTorrents(query) {
   ]);
 }
 
-async function torlock(query) {
-  const slug = encodeURIComponent(cleanText(query).replace(/\s+/g, "-"));
-  return scrapeSearchSite("TorLock", [
-    {
-      url: `https://www.torlock.com/all/torrents/${slug}.html?sort=seeds`,
-      rowSelector: "table tr",
-      linkSelector: 'a[href*="/torrent/"]',
-      titleSelectors: ['a[href*="/torrent/"]'],
-      seedSelectors: ["td:nth-child(5)", ".seeders", ".seeds"],
-      sizeSelectors: ["td:nth-child(4)", ".size"],
-      limit: 6,
-      matchLink: href => /\/torrent\//i.test(href),
-    },
-    {
-      url: `https://torlock-official.live/all/torrents/${slug}.html?sort=seeds`,
-      rowSelector: "table tr",
-      linkSelector: 'a[href*="/torrent/"]',
-      titleSelectors: ['a[href*="/torrent/"]'],
-      seedSelectors: ["td:nth-child(5)", ".seeders", ".seeds"],
-      sizeSelectors: ["td:nth-child(4)", ".size"],
-      limit: 6,
-      matchLink: href => /\/torrent\//i.test(href),
-    },
-  ]);
-}
-
 async function torrentDownloads(query) {
   const q = encodeURIComponent(query);
   return scrapeSearchSite("TorrentDownloads", [
@@ -423,22 +362,6 @@ async function torrentDownloads(query) {
       sizeSelectors: ["td:nth-child(3)", ".size"],
       limit: 6,
       matchLink: href => /\/torrent\//i.test(href),
-    },
-  ]);
-}
-
-async function extTo(query) {
-  const q = encodeURIComponent(query);
-  return scrapeSearchSite("EXT.to", [
-    {
-      url: `https://ext.to/search/?q=${q}`,
-      rowSelector: ".search-result, .torrent, table tr, li",
-      linkSelector: "a",
-      titleSelectors: [".torrent-title a", ".title a", 'a[href*="/torrent/"]', "a"],
-      seedSelectors: [".seeders", ".seeds", "td:nth-child(5)"],
-      sizeSelectors: [".size", "td:nth-child(4)"],
-      limit: 6,
-      matchLink: href => /\/torrent\/|\/download\//i.test(href),
     },
   ]);
 }
@@ -491,30 +414,27 @@ async function scrapeAll(imdbId, isSeries, season, episode) {
   console.log(`\n[Purefy] Query: "${query}" (${imdbId})`);
 
   const rankedSites = [
-    tpb(query),
-    knaben(query),
-    torrentsCsv(query),
-    bitsearch(query),
-    x1337(query),
-    torrentGalaxy(query),
-    nyaa(query),
-    limeTorrents(query),
-    torlock(query),
-    torrentDownloads(query),
-    extTo(query),
-    rargb(query),
+    withTimeout("TPB", tpb(query)),
+    withTimeout("Knaben", knaben(query)),
+    withTimeout("TorrCSV", torrentsCsv(query)),
+    withTimeout("Bitsearch", bitsearch(query)),
+    withTimeout("Nyaa", nyaa(query)),
+    withTimeout("LimeTorrents", limeTorrents(query)),
+    withTimeout("TorrentDownloads", torrentDownloads(query)),
+    withTimeout("RARGB", rargb(query)),
   ];
 
   const tasks = isSeries
-    ? [ eztv(imdbId, season, episode), ...rankedSites ]
-    : [ yts(imdbId), ...rankedSites ];
+    ? [ withTimeout("EZTV", eztv(imdbId, season, episode)), ...rankedSites ]
+    : rankedSites;
 
   const results = await Promise.allSettled(tasks);
   const all     = results.flatMap(r => r.status === "fulfilled" ? r.value : []);
+  const relevant = all.filter(s => matchesTitle(s, title));
 
   // Dedup por infoHash
   const seen = new Set();
-  const unique = all.filter(s => {
+  const unique = relevant.filter(s => {
     if (seen.has(s.infoHash)) return false;
     seen.add(s.infoHash);
     return true;
