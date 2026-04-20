@@ -48,6 +48,38 @@ function extractQuality(str) {
   return "Unknown";
 }
 
+function extractCodec(str) {
+  if (!str) return null;
+  if (/HEVC|x265|H\.265/i.test(str)) return "x265";
+  if (/AVC|x264|H\.264/i.test(str))  return "x264";
+  if (/AV1/i.test(str))              return "AV1";
+  if (/xvid/i.test(str))             return "XviD";
+  return null;
+}
+
+function extractAudio(str) {
+  if (!str) return null;
+  if (/DTS-HD|DTSHD/i.test(str))         return "DTS-HD";
+  if (/DTS/i.test(str))                  return "DTS";
+  if (/TrueHD|Atmos/i.test(str))         return "TrueHD";
+  if (/DD\+|EAC3|E-AC-3/i.test(str))    return "DD+";
+  if (/DD|AC3|Dolby/i.test(str))         return "DD";
+  if (/AAC/i.test(str))                  return "AAC";
+  if (/MP3/i.test(str))                  return "MP3";
+  return null;
+}
+
+function extractSource(str) {
+  if (!str) return null;
+  if (/BluRay|Blu-Ray|BDRip|BRRip/i.test(str)) return "BluRay";
+  if (/WEB-DL|WEBDL/i.test(str))               return "WEB-DL";
+  if (/WEBRip/i.test(str))                      return "WEBRip";
+  if (/HDRip/i.test(str))                       return "HDRip";
+  if (/HDTV/i.test(str))                        return "HDTV";
+  if (/CAM|HDCAM/i.test(str))                   return "CAM";
+  return null;
+}
+
 function parseNum(str) {
   if (!str) return 0;
   const n = parseInt(String(str).replace(/[^0-9]/g, ""), 10);
@@ -73,23 +105,53 @@ function buildMagnet(infoHash, name) {
   return `magnet:?xt=urn:btih:${infoHash}&dn=${encodeURIComponent(name || "")}${TRACKERS}`;
 }
 
-function makeStream({ source, title, quality, seeders, infoHash, magnet, size }) {
-  const q = quality || "Unknown";
-  const s = seeders || 0;
-  const sizeStr = size ? ` · ${size}` : "";
+function makeStream({ source, title, quality, seeders, leechers, infoHash, magnet, size, codec, audio }) {
+  const q = quality  || "Unknown";
+  const s = seeders  || 0;
+  const l = leechers || 0;
+
+  // name: negrito no Stremio (fonte + qualidade)
+  const nameLine = `${source} • ${q}`;
+
+  // Montar linhas de descrição
+  const lines = [];
+
+  // Nome do release (truncado)
+  if (title) {
+    const t = title.length > 60 ? title.slice(0, 57) + "…" : title;
+    lines.push(`📄 ${t}`);
+  }
+
+  // Qualidade + codec + audio
+  const techParts = [q];
+  if (codec) techParts.push(codec);
+  if (audio) techParts.push(audio);
+  lines.push(`🎬 ${techParts.join(" · ")}`);
+
+  // Tamanho
+  if (size) lines.push(`💾 ${size}`);
+
+  // Seeds / peers
+  lines.push(l > 0 ? `🌱 ${s} seeds  👥 ${l} peers` : `🌱 ${s} seeds`);
+
+  const description = lines.join("\n");
+
   const obj = {
-    name:  `${source}\n${q}`,
-    title: `👥 ${s} seeds${sizeStr}`,
-    _quality: q,
-    _seeders: s,
-    behaviorHints: { bingeGroup: `torrent|${q}` },
+    name:        nameLine,
+    description, // Stremio v5+
+    title:       description, // fallback versões antigas
+    _quality:    q,
+    _seeders:    s,
+    behaviorHints: { bingeGroup: `stream|${q}` },
   };
+
   if (infoHash) {
     obj.infoHash = infoHash.toLowerCase();
     obj.magnet   = magnet || buildMagnet(infoHash, title || "");
   } else if (magnet) {
     obj.magnet = magnet;
   }
+
   return obj;
 }
 
@@ -126,9 +188,12 @@ async function scrapeYTS(imdbId) {
       for (const t of movie.torrents || []) {
         streams.push(makeStream({
           source: "YTS",
-          title: movie.title,
-          quality: t.quality + (t.type !== "web" ? ` ${t.type}` : ""),
-          seeders: t.seeds,
+          title: movie.title_long || movie.title,
+          quality: t.quality,
+          codec:   t.video_codec || null,
+          audio:   t.audio_channels ? `${t.audio_channels}ch` : null,
+          seeders:  t.seeds,
+          leechers: t.peers,
           infoHash: t.hash,
           size: t.size,
         }));
@@ -161,10 +226,13 @@ async function scrapeEZTV(imdbId, season, episode) {
           });
         }
         const streams = list.slice(0, 15).map(t => makeStream({
-          source: "EZTV",
-          title: t.title,
-          quality: extractQuality(t.title),
-          seeders: t.seeds,
+          source:   "EZTV",
+          title:    t.title,
+          quality:  extractQuality(t.title),
+          codec:    extractCodec(t.title),
+          audio:    extractAudio(t.title),
+          seeders:  t.seeds,
+          leechers: t.peers,
           infoHash: t.hash,
           size: t.size_bytes ? `${(t.size_bytes / 1e9).toFixed(2)} GB` : null,
         }));
@@ -188,10 +256,13 @@ async function scrapePirateBay(query) {
     const { data } = await http.get(`${base}?q=${encodeURIComponent(query)}&cat=0`);
     if (!Array.isArray(data) || data[0]?.name === "No results returned") return [];
     const streams = data.slice(0, 15).map(t => makeStream({
-      source: "TPB",
-      title: t.name,
-      quality: extractQuality(t.name),
-      seeders: parseNum(t.seeders),
+      source:   "TPB",
+      title:    t.name,
+      quality:  extractQuality(t.name),
+      codec:    extractCodec(t.name),
+      audio:    extractAudio(t.name),
+      seeders:  parseNum(t.seeders),
+      leechers: parseNum(t.leechers),
       infoHash: t.info_hash,
       size: t.size ? `${(parseInt(t.size) / 1e9).toFixed(2)} GB` : null,
     }));
@@ -224,9 +295,11 @@ async function scrapeTorrentGalaxy(query) {
       const seeders = parseNum($(row).find("span.seedsnum, .tgxtd.seederslabel").text());
       const size    = $(row).find(".tgxtd.nobr, td.coll-4").first().text().trim();
       streams.push(makeStream({
-        source: "TGX",
-        title: name,
-        quality: extractQuality(name),
+        source:   "TGX",
+        title:    name,
+        quality:  extractQuality(name),
+        codec:    extractCodec(name),
+        audio:    extractAudio(name),
         seeders,
         infoHash: hashFromMagnet(magnet),
         magnet,
@@ -259,9 +332,11 @@ async function scrapeLimeTorrents(query) {
       const seeders = parseNum($(row).find("td.tdseed").text());
       const size    = $(row).find("td:nth-child(3)").text().trim();
       streams.push(makeStream({
-        source: "Lime",
-        title: name,
+        source:  "Lime",
+        title:   name,
         quality: extractQuality(name),
+        codec:   extractCodec(name),
+        audio:   extractAudio(name),
         seeders,
         infoHash: hashFromMagnet(magnet),
         magnet,
@@ -296,9 +371,11 @@ async function scrape1337x(query) {
         const magnet = $d('a[href^="magnet:"]').attr("href");
         if (!magnet) return null;
         return makeStream({
-          source: "1337x",
-          title: item.name,
+          source:  "1337x",
+          title:   item.name,
           quality: extractQuality(item.name),
+          codec:   extractCodec(item.name),
+          audio:   extractAudio(item.name),
           seeders: item.seeders,
           infoHash: hashFromMagnet(magnet),
           magnet,
@@ -403,12 +480,15 @@ async function scrapeTorrentApi(imdbId) {
     );
     if (!data?.torrent_results?.length) return [];
     const streams = data.torrent_results.slice(0, 10).map(t => makeStream({
-      source: "RARBG",
-      title: t.title,
-      quality: extractQuality(t.title),
-      seeders: t.seeders,
+      source:   "RARBG",
+      title:    t.title,
+      quality:  extractQuality(t.title),
+      codec:    extractCodec(t.title),
+      audio:    extractAudio(t.title),
+      seeders:  t.seeders,
+      leechers: t.leechers,
       infoHash: hashFromMagnet(t.download),
-      magnet: t.download,
+      magnet:   t.download,
       size: t.size ? `${(t.size / 1e9).toFixed(2)} GB` : null,
     }));
     console.log(`[RARBG] ${streams.length}`);
@@ -435,9 +515,11 @@ async function scrapeKickass(query) {
       const seeders = parseNum($(row).find("td.green").first().text());
       const size    = $(row).find("td.nobr").first().text().trim();
       streams.push(makeStream({
-        source: "KAT",
-        title: name,
+        source:  "KAT",
+        title:   name,
         quality: extractQuality(name),
+        codec:   extractCodec(name),
+        audio:   extractAudio(name),
         seeders,
         infoHash: hashFromMagnet(magnet),
         magnet,
