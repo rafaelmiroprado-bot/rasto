@@ -23,6 +23,6 @@ app.get("*", (req, res) => {
 const PORT = process.env.PORT || 7000;
 
 app.listen(PORT, "0.0.0.0", () => {
-  console.log(`Rasto rodando em http://0.0.0.0:${PORT}`);
+  console.log(`Anzol rodando em http://0.0.0.0:${PORT}`);
   console.log(`Manifest: http://0.0.0.0:${PORT}/manifest.json`);
 });

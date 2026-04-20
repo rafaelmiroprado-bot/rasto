@@ -2,10 +2,10 @@ const { addonBuilder } = require("stremio-addon-sdk");
 const scrapers = require("./scrapers");
 
 const manifest = {
-  id: "br.stremio.rasto",
+  id: "br.stremio.anzol",
   version: "1.0.0",
-  name: "Rasto",
-  description: "Rastre streams de múltiplas fontes para filmes e séries.",
+  name: "Anzol",
+  description: "Encontre streams de múltiplas fontes para filmes e séries.",
   logo: "https://i.imgur.com/p4MQHQV.png",
   background: "https://i.imgur.com/p4MQHQV.png",
   resources: ["stream"],
@@ -21,7 +21,7 @@ const manifest = {
 const builder = new addonBuilder(manifest);
 
 builder.defineStreamHandler(async ({ type, id }) => {
-  console.log(`\n[Rasto] type=${type} id=${id}`);
+  console.log(`\n[Anzol] type=${type} id=${id}`);
 
   const parts   = id.split(":");
   const imdbId  = parts[0];
@@ -33,7 +33,7 @@ builder.defineStreamHandler(async ({ type, id }) => {
   try {
     allStreams = await scrapers.scrapeAll(imdbId, isSeries, season, episode);
   } catch (err) {
-    console.error("[Rasto] Erro:", err.message);
+    console.error("[Anzol] Erro:", err.message);
   }
 
   // Deduplicar por infoHash
@@ -55,7 +55,7 @@ builder.defineStreamHandler(async ({ type, id }) => {
     return (b._seeders || 0) - (a._seeders || 0);
   });
 
-  console.log(`[Rasto] ${unique.length} streams encontrados`);
+  console.log(`[Anzol] ${unique.length} streams encontrados`);
   return { streams: unique };
 });
 

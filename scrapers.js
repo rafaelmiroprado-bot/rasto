@@ -1,5 +1,5 @@
 /**
- * Rasto — scrapers.js
+ * Anzol — scrapers.js
  * Fontes otimizadas para rodar em servidor (Railway/VPS)
  * Todas com retry, múltiplos mirrors e headers anti-bloqueio
  */
@@ -855,7 +855,7 @@ async function scrapeAll(imdbId, isSeries, season, episode) {
     ? `${title} S${String(season).padStart(2, "0")}E${String(episode).padStart(2, "0")}`
     : `${title} ${year}`.trim();
 
-  console.log(`\n[Rasto] "${query}" | ${imdbId}`);
+  console.log(`\n[Anzol] "${query}" | ${imdbId}`);
 
   const tasks = [
     // ── APIs JSON (mais confiáveis de servidor) ───────────────────────

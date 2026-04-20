@@ -1,4 +1,4 @@
-# Rasto — Stremio Addon
+# Anzol — Stremio Addon
 
 Addon que busca streams de múltiplas fontes para filmes e séries.
 
