@@ -1,12 +1,11 @@
-const { addonBuilder, serveHTTP } = require("stremio-addon-sdk");
+const { addonBuilder } = require("stremio-addon-sdk");
 const scrapers = require("./scrapers");
 
 const manifest = {
-  id: "br.stremio.torrent.scraper",
+  id: "br.stremio.stream.finder",
   version: "1.0.0",
-  name: "TorrentBR Scraper",
-  description:
-    "Raspa torrents de múltiplas fontes para filmes e séries. Suporta YTS, 1337x, The Pirate Bay e mais.",
+  name: "StreamBR Finder",
+  description: "Busca streams de múltiplas fontes para filmes e séries.",
   logo: "https://i.imgur.com/p4MQHQV.png",
   background: "https://i.imgur.com/p4MQHQV.png",
   resources: ["stream"],
@@ -22,23 +21,19 @@ const manifest = {
 const builder = new addonBuilder(manifest);
 
 builder.defineStreamHandler(async ({ type, id }) => {
-  console.log(`\n[TorrentBR] Buscando streams para: type=${type} id=${id}`);
+  console.log(`\n[StreamBR] type=${type} id=${id}`);
 
-  // Parse id — filmes: "tt1234567", séries: "tt1234567:1:2"
-  const parts = id.split(":");
-  const imdbId = parts[0];
-  const season = parts[1] ? parseInt(parts[1]) : null;
+  const parts   = id.split(":");
+  const imdbId  = parts[0];
+  const season  = parts[1] ? parseInt(parts[1]) : null;
   const episode = parts[2] ? parseInt(parts[2]) : null;
-
   const isSeries = type === "series" && season !== null;
 
   let allStreams = [];
-
   try {
-    const results = await scrapers.scrapeAll(imdbId, isSeries, season, episode);
-    allStreams = results;
+    allStreams = await scrapers.scrapeAll(imdbId, isSeries, season, episode);
   } catch (err) {
-    console.error("[TorrentBR] Erro geral no scraping:", err.message);
+    console.error("[StreamBR] Erro:", err.message);
   }
 
   // Deduplicar por infoHash
@@ -51,7 +46,7 @@ builder.defineStreamHandler(async ({ type, id }) => {
     return true;
   });
 
-  // Ordenar: qualidade > seeders
+  // Ordenar por qualidade > seeders
   const qualityOrder = { "2160p": 0, "1080p": 1, "720p": 2, "480p": 3, "360p": 4 };
   unique.sort((a, b) => {
     const qa = qualityOrder[a._quality] ?? 9;
@@ -60,8 +55,7 @@ builder.defineStreamHandler(async ({ type, id }) => {
     return (b._seeders || 0) - (a._seeders || 0);
   });
 
-  console.log(`[TorrentBR] Total de streams encontrados: ${unique.length}`);
-
+  console.log(`[StreamBR] ${unique.length} streams encontrados`);
   return { streams: unique };
 });
 
