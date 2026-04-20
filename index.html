@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-<title>Phantom — Addon Stremio</title>
+<title>Sharefy — Addon Stremio</title>
 <link rel="preconnect" href="https://fonts.googleapis.com"/>
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet"/>
 <style>
@@ -195,27 +195,30 @@
     Addon Ativo
   </div>
 
-  <h1>PHANTOM</h1>
-  <p class="tagline">Raspa torrents de 7 fontes em paralelo direto no seu Stremio. Filmes, séries e anime com um clique.</p>
+  <h1>SHAREFY</h1>
+  <p class="tagline">Busca streams torrent em múltiplas fontes e entrega resultados compatíveis com o app Stremio.</p>
 
   <div class="sources">
     <span class="source-pill">YTS / YTS-Official</span>
-    <span class="source-pill">The Pirate Bay</span>
     <span class="source-pill">EZTV</span>
+    <span class="source-pill">The Pirate Bay</span>
+    <span class="source-pill">Knaben</span>
+    <span class="source-pill">Torrents.csv</span>
+    <span class="source-pill">Bitsearch</span>
+    <span class="source-pill">SolidTorrents</span>
+    <span class="source-pill">Snowfl</span>
+    <span class="source-pill">EXT.to</span>
     <span class="source-pill">TorrentGalaxy</span>
-    <span class="source-pill">LimeTorrents</span>
     <span class="source-pill">1337x</span>
-    <span class="source-pill">RARBG</span>
-    <span class="source-pill">Kickass</span>
+    <span class="source-pill">LimeTorrents</span>
     <span class="source-pill">Nyaa.si</span>
     <span class="source-pill">RuTracker</span>
-    <span class="source-pill">TorrentDownloads</span>
+    <span class="source-pill">RARBG</span>
     <span class="source-pill">TorLock</span>
+    <span class="source-pill">SpeedTorrent</span>
+    <span class="source-pill">TorrentDownloads</span>
+    <span class="source-pill">Kickass</span>
     <span class="source-pill">Zooqle</span>
-    <span class="source-pill">BTDigg</span>
-    <span class="source-pill">Internet Archive</span>
-    <span class="source-pill">Public Domain Torrents</span>
-    <span class="source-pill">ApacheTorrent</span>
   </div>
 
   <div class="cta-area">
@@ -233,12 +236,12 @@
     <div class="card">
       <div class="card-icon">⚡</div>
       <h3>Busca Paralela</h3>
-      <p>Todas as 7 fontes são consultadas simultaneamente para máxima velocidade.</p>
+      <p>As fontes são consultadas em paralelo, com tempo limite para o Stremio não ficar esperando.</p>
     </div>
     <div class="card">
       <div class="card-icon">🎯</div>
       <h3>Ordenado por Qualidade</h3>
-      <p>Resultados organizados: 4K → 1080p → 720p, com mais seeders primeiro.</p>
+      <p>Resultados organizados por qualidade e seeders, com limite por resolução.</p>
     </div>
     <div class="card">
       <div class="card-icon">📺</div>
@@ -294,7 +297,7 @@
   </div>
 
   <footer>
-    PHANTOM Scraper · Para uso educacional · Não hospedamos nenhum conteúdo
+    SHAREFY Scraper · Para uso educacional · Não hospedamos nenhum conteúdo
   </footer>
 
 </div>
@@ -303,7 +306,7 @@
   // Detect the public URL dynamically
   const base = window.location.origin;
   const manifestUrl = base + "/manifest.json";
-  const stremioUrl = "stremio://" + window.location.host + "/manifest.json";
+  const stremioUrl = "stremio://" + manifestUrl.replace(/^https?:\/\//, "");
 
   document.getElementById("manifestUrl").textContent = manifestUrl;
   document.getElementById("installBtn").href = stremioUrl;
