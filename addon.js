@@ -2,6 +2,9 @@ const { addonBuilder } = require("stremio-addon-sdk");
 const scrapers = require("./scrapers");
 
 // Logo served from own server — URL injected at runtime by server.js
+const ADDON_ID = "community.sharefy.streams";
+const ADDON_NAME = "Sharefy";
+const ADDON_VERSION = "1.0.1";
 const BASE_URL = (process.env.ADDON_BASE_URL || "http://localhost:7000").replace(/\/+$/, "");
 const CACHE_TTL_MS = parseInt(process.env.STREAM_CACHE_TTL_MS || "900000", 10);
 const MAX_STREAMS = parseInt(process.env.MAX_STREAMS || "80", 10);
@@ -16,9 +19,9 @@ const EXCLUDE_QUALITIES = new Set(
 const streamCache = new Map();
 
 const manifest = {
-  id: "br.stremio.sharefy",
-  version: "1.0.0",
-  name: "Sharefy",
+  id: ADDON_ID,
+  version: ADDON_VERSION,
+  name: ADDON_NAME,
   description: "Find torrent streams from multiple sources for movies and series.",
   logo:       `${BASE_URL}/logo.svg`,
   background: `${BASE_URL}/logo.svg`,
