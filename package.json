@@ -1,7 +1,7 @@
 {
-  "name": "sharefy",
-  "version": "1.0.1",
-  "description": "Stremio addon that finds torrent streams from multiple sources",
+  "name": "purefy",
+  "version": "1.0.0",
+  "description": "Stremio addon that finds streams from multiple sources",
   "main": "server.js",
   "engines": {
     "node": ">=20.0.0"
