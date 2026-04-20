@@ -1,5 +1,5 @@
 /**
- * Anzol — scrapers.js
+ * Hookline — scrapers.js
  * Fontes otimizadas para rodar em servidor (Railway/VPS)
  * Todas com retry, múltiplos mirrors e headers anti-bloqueio
  */
@@ -92,19 +92,30 @@ function hashFromMagnet(magnet) {
   return m ? m[1] : null;
 }
 
+function cleanHash(h) {
+  if (!h) return null;
+  h = String(h).replace(/^.*btih:/i, "").trim();
+  if (/^[a-fA-F0-9]{40}$/.test(h)) return h.toLowerCase();
+  if (/^[a-fA-F0-9]{32}$/.test(h)) return h.toLowerCase();
+  if (/^[a-zA-Z2-7]{32}$/i.test(h)) return h.toLowerCase();
+  return null;
+}
+
 function makeStream({ source, title, quality, seeders, leechers, infoHash, magnet, size, codec, audio }) {
   const q = quality || "Unknown";
-  const s = seeders || 0;
+  const s = seeders  || 0;
   const l = leechers || 0;
 
   const lines = [];
-  if (title) lines.push(`📄 ${title.length > 60 ? title.slice(0, 57) + "…" : title}`);
+  if (title) lines.push(`📄 ${title.length > 60 ? title.slice(0, 57) + "\u2026" : title}`);
   const tech = [q, codec, audio].filter(Boolean).join(" · ");
   lines.push(`🎬 ${tech}`);
   if (size) lines.push(`💾 ${size}`);
   lines.push(l > 0 ? `🌱 ${s} seeds  👥 ${l} peers` : `🌱 ${s} seeds`);
 
   const description = lines.join("\n");
+
+  const hash = cleanHash(infoHash) || cleanHash(hashFromMagnet(magnet));
 
   const obj = {
     name:        `${source} • ${q}`,
@@ -115,12 +126,11 @@ function makeStream({ source, title, quality, seeders, leechers, infoHash, magne
     behaviorHints: { bingeGroup: `stream|${q}` },
   };
 
-  if (infoHash) {
-    obj.infoHash = infoHash.toLowerCase();
-    obj.magnet   = magnet || buildMagnet(infoHash, title || "");
-  } else if (magnet) {
-    obj.magnet = magnet;
+  if (hash) {
+    obj.infoHash = hash;
+    obj.magnet   = magnet || buildMagnet(hash, title || "");
   }
+
   return obj;
 }
 
@@ -855,7 +865,7 @@ async function scrapeAll(imdbId, isSeries, season, episode) {
     ? `${title} S${String(season).padStart(2, "0")}E${String(episode).padStart(2, "0")}`
     : `${title} ${year}`.trim();
 
-  console.log(`\n[Anzol] "${query}" | ${imdbId}`);
+  console.log(`\n[Hookline] "${query}" | ${imdbId}`);
 
   const tasks = [
     // ── APIs JSON (mais confiáveis de servidor) ───────────────────────

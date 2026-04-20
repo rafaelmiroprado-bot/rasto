@@ -2,27 +2,64 @@ const express = require("express");
 const cors    = require("cors");
 const path    = require("path");
 
+// ── Detecta URL base do próprio servidor para o logo ─────────────────────────
+// Railway injeta RAILWAY_PUBLIC_DOMAIN; fallback para PORT
+const publicDomain = process.env.RAILWAY_PUBLIC_DOMAIN;
+if (publicDomain && !process.env.ADDON_BASE_URL) {
+  process.env.ADDON_BASE_URL = `https://${publicDomain}`;
+}
+
 const addonInterface = require("./addon");
 const { getRouter }  = require("stremio-addon-sdk");
 
 const app = express();
-
 app.use(cors());
-
-// Página de instalação
 app.use(express.static(path.join(__dirname, "public")));
 
-// Rotas do addon Stremio (manifest.json, stream handler, etc.)
+// Serve SVG logo with correct content-type
+app.get("/logo.svg", (req, res) => {
+  res.setHeader("Content-Type", "image/svg+xml");
+  res.sendFile(path.join(__dirname, "public", "logo.svg"));
+});
+
+// Health check
+app.get("/health", (req, res) => {
+  res.json({ status: "ok", name: "Hookline", baseUrl: process.env.ADDON_BASE_URL, time: new Date().toISOString() });
+});
+
+// Test endpoint
+app.get("/test", async (req, res) => {
+  try {
+    const scrapers = require("./scrapers");
+    const imdbId   = req.query.id || "tt0468569";
+    const streams  = await scrapers.scrapeAll(imdbId, false, null, null);
+    const valid    = streams.filter(s => s.infoHash || s.url);
+    res.json({
+      imdbId,
+      total: streams.length,
+      valid: valid.length,
+      sample: valid.slice(0, 3).map(s => ({
+        name: s.name, infoHash: s.infoHash, seeders: s._seeders, quality: s._quality,
+      })),
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Stremio addon routes
 app.use(getRouter(addonInterface));
 
-// Fallback — redireciona qualquer rota desconhecida para a página inicial
+// Fallback
 app.get("*", (req, res) => {
   res.sendFile(path.join(__dirname, "public", "index.html"));
 });
 
 const PORT = process.env.PORT || 7000;
-
 app.listen(PORT, "0.0.0.0", () => {
-  console.log(`Anzol rodando em http://0.0.0.0:${PORT}`);
-  console.log(`Manifest: http://0.0.0.0:${PORT}/manifest.json`);
+  const base = process.env.ADDON_BASE_URL || `http://localhost:${PORT}`;
+  console.log(`[Hookline] Running at ${base}`);
+  console.log(`[Hookline] Logo:     ${base}/logo.svg`);
+  console.log(`[Hookline] Manifest: ${base}/manifest.json`);
+  console.log(`[Hookline] Test:     ${base}/test`);
 });
