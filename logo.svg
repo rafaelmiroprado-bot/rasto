@@ -1,36 +1,35 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
   <defs>
-    <radialGradient id="bg" cx="50%" cy="50%" r="50%">
-      <stop offset="0%" stop-color="#1a1a3e"/>
-      <stop offset="100%" stop-color="#0a0a1a"/>
+    <radialGradient id="bg" cx="50%" cy="40%" r="55%">
+      <stop offset="0%" stop-color="#1a0a2e"/>
+      <stop offset="100%" stop-color="#050508"/>
     </radialGradient>
-    <linearGradient id="hook" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#00d4ff"/>
-      <stop offset="100%" stop-color="#0077ff"/>
+    <linearGradient id="glow" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#b44fff"/>
+      <stop offset="100%" stop-color="#5500cc"/>
     </linearGradient>
-    <filter id="glow">
-      <feGaussianBlur stdDeviation="3" result="blur"/>
-      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    <filter id="blur">
+      <feGaussianBlur stdDeviation="4" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
     </filter>
   </defs>
-  <!-- Background circle -->
+  <!-- Background -->
   <circle cx="128" cy="128" r="128" fill="url(#bg)"/>
-  <!-- Outer ring -->
-  <circle cx="128" cy="128" r="118" fill="none" stroke="#00d4ff" stroke-width="2" opacity="0.3"/>
-  <!-- Hook shape -->
-  <g filter="url(#glow)" stroke="url(#hook)" stroke-width="10" fill="none" stroke-linecap="round">
-    <!-- Vertical line -->
-    <line x1="128" y1="60" x2="128" y2="155"/>
-    <!-- Curve at bottom -->
-    <path d="M128,155 Q128,195 105,195 Q82,195 82,175 Q82,162 95,158"/>
-    <!-- Barb -->
-    <path d="M95,158 L82,145"/>
+  <!-- Outer glow ring -->
+  <circle cx="128" cy="128" r="116" fill="none" stroke="#b44fff" stroke-width="1.5" opacity="0.25"/>
+  <!-- Ghost/mask shape -->
+  <g filter="url(#blur)">
+    <!-- Head -->
+    <path d="M88,148 Q88,88 128,84 Q168,88 168,148 L168,172 Q155,164 148,172 Q141,180 128,172 Q115,180 108,172 Q101,164 88,172 Z"
+          fill="url(#glow)" opacity="0.92"/>
+    <!-- Eyes — empty hollow sockets -->
+    <ellipse cx="112" cy="130" rx="10" ry="12" fill="#050508"/>
+    <ellipse cx="144" cy="130" rx="10" ry="12" fill="#050508"/>
+    <!-- Eye glow -->
+    <ellipse cx="112" cy="130" rx="5" ry="6" fill="#cc88ff" opacity="0.8"/>
+    <ellipse cx="144" cy="130" rx="5" ry="6" fill="#cc88ff" opacity="0.8"/>
   </g>
-  <!-- Fishing line dots -->
-  <circle cx="128" cy="50" r="4" fill="#00d4ff" opacity="0.8"/>
-  <circle cx="128" cy="38" r="3" fill="#00d4ff" opacity="0.5"/>
-  <circle cx="128" cy="28" r="2" fill="#00d4ff" opacity="0.3"/>
   <!-- Text -->
-  <text x="128" y="228" font-family="Arial Black, sans-serif" font-size="22" font-weight="900"
-        fill="#ffffff" text-anchor="middle" letter-spacing="3">HOOKLINE</text>
+  <text x="128" y="226" font-family="Arial Black, sans-serif" font-size="20" font-weight="900"
+        fill="#cc88ff" text-anchor="middle" letter-spacing="4" opacity="0.95">PHANTOM</text>
 </svg>

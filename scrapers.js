@@ -1,74 +1,69 @@
 /**
- * Hookline — scrapers.js
- * Fontes otimizadas para rodar em servidor (Railway/VPS)
- * Todas com retry, múltiplos mirrors e headers anti-bloqueio
+ * Phantom — scrapers.js
+ * Estratégia: APIs JSON confiáveis primeiro, HTML scrapers como bônus.
+ * Todas as fontes rodam em paralelo via Promise.allSettled.
  */
 
 const axios   = require("axios");
 const cheerio = require("cheerio");
 
-// ─── HTTP clients ─────────────────────────────────────────────────────────────
-
-function makeClient(extraHeaders = {}) {
-  return axios.create({
-    timeout: 20000,
-    headers: {
-      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-      "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-      "Accept-Language": "en-US,en;q=0.9",
-      "Accept-Encoding": "gzip, deflate, br",
-      "Connection": "keep-alive",
-      "Upgrade-Insecure-Requests": "1",
-      "Sec-Fetch-Dest": "document",
-      "Sec-Fetch-Mode": "navigate",
-      "Sec-Fetch-Site": "none",
-      "Cache-Control": "max-age=0",
-      ...extraHeaders,
-    },
-    maxRedirects: 5,
-  });
-}
-
-const http     = makeClient();
-const httpJson = makeClient({ "Accept": "application/json, text/plain, */*", "Content-Type": "application/json" });
+const http = axios.create({
+  timeout: 15000,
+  headers: {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Accept": "application/json, text/html, */*",
+    "Accept-Language": "en-US,en;q=0.9",
+  },
+});
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-function extractQuality(str) {
-  if (!str) return "Unknown";
-  if (/2160p|4K|UHD/i.test(str))    return "2160p";
-  if (/1080p|FHD/i.test(str))       return "1080p";
-  if (/720p|HD(?!R)/i.test(str))    return "720p";
-  if (/480p/i.test(str))            return "480p";
-  if (/360p/i.test(str))            return "360p";
+function quality(s) {
+  if (!s) return "Unknown";
+  if (/2160p|4K|UHD/i.test(s))  return "2160p";
+  if (/1080p|FHD/i.test(s))     return "1080p";
+  if (/720p/i.test(s))          return "720p";
+  if (/480p/i.test(s))          return "480p";
+  if (/360p/i.test(s))          return "360p";
   return "Unknown";
 }
 
-function extractCodec(str) {
-  if (!str) return null;
-  if (/HEVC|x265|H\.265/i.test(str)) return "x265";
-  if (/AVC|x264|H\.264/i.test(str))  return "x264";
-  if (/AV1/i.test(str))              return "AV1";
-  if (/XviD/i.test(str))             return "XviD";
+function codec(s) {
+  if (!s) return null;
+  if (/HEVC|x265|H\.265/i.test(s)) return "x265";
+  if (/x264|H\.264|AVC/i.test(s))  return "x264";
+  if (/AV1/i.test(s))              return "AV1";
   return null;
 }
 
-function extractAudio(str) {
-  if (!str) return null;
-  if (/DTS-HD|DTSHD/i.test(str))      return "DTS-HD";
-  if (/TrueHD|Atmos/i.test(str))      return "TrueHD";
-  if (/DD\+|EAC3|E-AC-3/i.test(str)) return "DD+";
-  if (/DTS/i.test(str))               return "DTS";
-  if (/DD|AC3|Dolby/i.test(str))      return "DD";
-  if (/AAC/i.test(str))               return "AAC";
-  if (/MP3/i.test(str))               return "MP3";
+function audio(s) {
+  if (!s) return null;
+  if (/DTS-HD/i.test(s))           return "DTS-HD";
+  if (/TrueHD|Atmos/i.test(s))     return "TrueHD";
+  if (/DD\+|EAC3/i.test(s))        return "DD+";
+  if (/DTS/i.test(s))              return "DTS";
+  if (/DD|AC3|Dolby/i.test(s))     return "DD";
+  if (/AAC/i.test(s))              return "AAC";
   return null;
 }
 
-function parseNum(str) {
-  if (!str) return 0;
-  const n = parseInt(String(str).replace(/[^0-9]/g, ""), 10);
+function num(s) {
+  const n = parseInt(String(s || "").replace(/\D/g, ""), 10);
   return isNaN(n) ? 0 : n;
+}
+
+function hashFromMagnet(m) {
+  const r = (m || "").match(/xt=urn:btih:([a-fA-F0-9]{40}|[a-zA-Z2-7]{32})/i);
+  return r ? r[1].toLowerCase() : null;
+}
+
+function validHash(h) {
+  if (!h) return null;
+  h = String(h).replace(/^.*btih:/i, "").trim().toLowerCase();
+  if (/^[a-f0-9]{40}$/.test(h))  return h;
+  if (/^[a-f0-9]{32}$/.test(h))  return h;
+  if (/^[a-z2-7]{32}$/.test(h))  return h;
+  return null;
 }
 
 const TRACKERS = [
@@ -76,820 +71,341 @@ const TRACKERS = [
   "udp://open.tracker.cl:1337/announce",
   "udp://tracker.openbittorrent.com:6969/announce",
   "udp://exodus.desync.com:6969/announce",
-  "udp://tracker.torrent.eu.org:451/announce",
   "udp://open.stealth.si:80/announce",
-  "udp://tracker.tiny-vps.com:6969/announce",
-  "udp://tracker.moeking.me:6969/announce",
-  "udp://tracker.leechers-paradise.org:6969/announce",
 ].map(t => `&tr=${encodeURIComponent(t)}`).join("");
 
-function buildMagnet(hash, name) {
+function magnet(hash, name) {
   return `magnet:?xt=urn:btih:${hash}&dn=${encodeURIComponent(name || "")}${TRACKERS}`;
 }
 
-function hashFromMagnet(magnet) {
-  const m = (magnet || "").match(/xt=urn:btih:([a-fA-F0-9]{40}|[a-zA-Z2-7]{32})/i);
-  return m ? m[1] : null;
-}
+function stream(source, title, q, seeds, hash, mag, size, leechers) {
+  const h = validHash(hash) || validHash(hashFromMagnet(mag));
+  if (!h) return null; // Stremio needs a valid hash
 
-function cleanHash(h) {
-  if (!h) return null;
-  h = String(h).replace(/^.*btih:/i, "").trim();
-  if (/^[a-fA-F0-9]{40}$/.test(h)) return h.toLowerCase();
-  if (/^[a-fA-F0-9]{32}$/.test(h)) return h.toLowerCase();
-  if (/^[a-zA-Z2-7]{32}$/i.test(h)) return h.toLowerCase();
-  return null;
-}
-
-function makeStream({ source, title, quality, seeders, leechers, infoHash, magnet, size, codec, audio }) {
-  const q = quality || "Unknown";
-  const s = seeders  || 0;
-  const l = leechers || 0;
+  const q2   = q || quality(title);
+  const s    = seeds    || 0;
+  const l    = leechers || 0;
+  const c    = codec(title);
+  const a    = audio(title);
+  const name = `${source} • ${q2}`;
 
   const lines = [];
-  if (title) lines.push(`📄 ${title.length > 60 ? title.slice(0, 57) + "\u2026" : title}`);
-  const tech = [q, codec, audio].filter(Boolean).join(" · ");
-  lines.push(`🎬 ${tech}`);
-  if (size) lines.push(`💾 ${size}`);
+  if (title) lines.push(`📄 ${title.length > 55 ? title.slice(0,52)+"…" : title}`);
+  lines.push(`🎬 ${[q2, c, a].filter(Boolean).join(" · ")}`);
+  if (size)  lines.push(`💾 ${size}`);
   lines.push(l > 0 ? `🌱 ${s} seeds  👥 ${l} peers` : `🌱 ${s} seeds`);
 
-  const description = lines.join("\n");
-
-  const hash = cleanHash(infoHash) || cleanHash(hashFromMagnet(magnet));
-
-  const obj = {
-    name:        `${source} • ${q}`,
-    description,
-    title: description,
-    _quality: q,
-    _seeders: s,
-    behaviorHints: { bingeGroup: `stream|${q}` },
+  const desc = lines.join("\n");
+  return {
+    name, description: desc, title: desc,
+    infoHash: h,
+    magnet: mag || magnet(h, title),
+    _q: q2, _s: s,
+    behaviorHints: { bingeGroup: `phantom|${q2}` },
   };
-
-  if (hash) {
-    obj.infoHash = hash;
-    obj.magnet   = magnet || buildMagnet(hash, title || "");
-  }
-
-  return obj;
 }
 
-async function tryMirrors(mirrors, fn) {
-  for (const mirror of mirrors) {
+async function mirrors(urls, fn) {
+  for (const url of urls) {
     try {
-      const result = await fn(mirror);
-      if (result && result.length > 0) return result;
-    } catch (e) {
-      console.warn(`  ↳ ${mirror} falhou: ${e.message}`);
-    }
+      const r = await fn(url);
+      if (r && r.length) return r;
+    } catch(e) { console.warn(`  ↳ ${url}: ${e.message}`); }
   }
   return [];
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-// 1. YTS  — API JSON oficial (melhor fonte para filmes)
+// 1. YTS — API JSON, melhor para filmes
 // ══════════════════════════════════════════════════════════════════════════════
-async function scrapeYTS(imdbId) {
-  const mirrors = [
+async function yts(imdbId) {
+  return mirrors([
     "https://yts.mx",
     "https://yts.lt",
     "https://yts.do",
-  ];
-  return tryMirrors(mirrors, async (base) => {
-    const { data } = await httpJson.get(
-      `${base}/api/v2/list_movies.json?query_term=${imdbId}&limit=10`
-    );
+  ], async base => {
+    const { data } = await http.get(`${base}/api/v2/list_movies.json?query_term=${imdbId}&limit=10`);
     if (!data?.data?.movies?.length) return [];
-    const streams = [];
-    for (const movie of data.data.movies) {
-      for (const t of (movie.torrents || [])) {
-        streams.push(makeStream({
-          source:   "YTS",
-          title:    movie.title_long || movie.title,
-          quality:  t.quality,
-          codec:    t.video_codec || extractCodec(t.quality),
-          audio:    t.audio_channels ? `${t.audio_channels}ch` : null,
-          seeders:  t.seeds,
-          leechers: t.peers,
-          infoHash: t.hash,
-          size:     t.size,
-        }));
+    const out = [];
+    for (const m of data.data.movies) {
+      for (const t of (m.torrents || [])) {
+        const s = stream("YTS", m.title_long || m.title, t.quality, t.seeds, t.hash, null, t.size, t.peers);
+        if (s) out.push(s);
       }
     }
-    console.log(`[YTS] ${streams.length}`);
-    return streams;
+    console.log(`[YTS] ${out.length}`);
+    return out;
   });
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-// 2. EZTV — API JSON oficial (séries)
+// 2. EZTV — API JSON, melhor para séries
 // ══════════════════════════════════════════════════════════════════════════════
-async function scrapeEZTV(imdbId, season, episode) {
-  const num = imdbId.replace("tt", "");
-  const mirrors = [
-    `https://eztv.re/api/get-torrents?imdb_id=${num}&limit=30`,
-    `https://eztv.tf/api/get-torrents?imdb_id=${num}&limit=30`,
-    `https://eztv.wf/api/get-torrents?imdb_id=${num}&limit=30`,
-  ];
-  for (const url of mirrors) {
-    try {
-      const { data } = await httpJson.get(url);
-      if (!data?.torrents?.length) continue;
-      let list = data.torrents;
-      if (season !== null && episode !== null) {
-        list = list.filter(t => {
-          const m = (t.title || "").match(/S(\d+)E(\d+)/i);
-          return m && parseInt(m[1]) === season && parseInt(m[2]) === episode;
-        });
-      }
-      const streams = list.slice(0, 20).map(t => makeStream({
-        source:   "EZTV",
-        title:    t.title,
-        quality:  extractQuality(t.title),
-        codec:    extractCodec(t.title),
-        audio:    extractAudio(t.title),
-        seeders:  t.seeds,
-        leechers: t.peers,
-        infoHash: t.hash,
-        size: t.size_bytes ? `${(t.size_bytes / 1e9).toFixed(2)} GB` : null,
-      }));
-      console.log(`[EZTV] ${streams.length}`);
-      return streams;
-    } catch (e) {
-      console.warn(`[EZTV] ${url}: ${e.message}`);
+async function eztv(imdbId, season, episode) {
+  const id = imdbId.replace("tt","");
+  return mirrors([
+    `https://eztv.re/api/get-torrents?imdb_id=${id}&limit=30`,
+    `https://eztv.tf/api/get-torrents?imdb_id=${id}&limit=30`,
+    `https://eztv.wf/api/get-torrents?imdb_id=${id}&limit=30`,
+  ], async url => {
+    const { data } = await http.get(url);
+    if (!data?.torrents?.length) return [];
+    let list = data.torrents;
+    if (season != null && episode != null) {
+      list = list.filter(t => {
+        const m = (t.title||"").match(/S(\d+)E(\d+)/i);
+        return m && +m[1]===season && +m[2]===episode;
+      });
     }
-  }
-  return [];
+    const out = list.slice(0,20).map(t => {
+      const size = t.size_bytes ? `${(t.size_bytes/1e9).toFixed(2)} GB` : null;
+      return stream("EZTV", t.title, quality(t.title), t.seeds, t.hash, null, size, t.peers);
+    }).filter(Boolean);
+    console.log(`[EZTV] ${out.length}`);
+    return out;
+  });
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-// 3. The Pirate Bay — via apibay.org (API JSON pública)
+// 3. The Pirate Bay — apibay JSON
 // ══════════════════════════════════════════════════════════════════════════════
-async function scrapePirateBay(query) {
-  const mirrors = [
+async function tpb(query) {
+  return mirrors([
     "https://apibay.org",
     "https://apibay.co",
-  ];
-  return tryMirrors(mirrors, async (base) => {
-    const { data } = await httpJson.get(
-      `${base}/q.php?q=${encodeURIComponent(query)}&cat=200`
-    );
-    if (!Array.isArray(data) || !data.length || data[0]?.name === "No results returned") return [];
-    const streams = data.slice(0, 15).map(t => makeStream({
-      source:   "TPB",
-      title:    t.name,
-      quality:  extractQuality(t.name),
-      codec:    extractCodec(t.name),
-      audio:    extractAudio(t.name),
-      seeders:  parseNum(t.seeders),
-      leechers: parseNum(t.leechers),
-      infoHash: t.info_hash,
-      size: t.size ? `${(parseInt(t.size) / 1e9).toFixed(2)} GB` : null,
-    }));
-    console.log(`[TPB] ${streams.length}`);
-    return streams;
+  ], async base => {
+    const { data } = await http.get(`${base}/q.php?q=${encodeURIComponent(query)}&cat=200`);
+    if (!Array.isArray(data) || data[0]?.name === "No results returned") return [];
+    const out = data.slice(0,15).map(t => {
+      const size = t.size ? `${(+t.size/1e9).toFixed(2)} GB` : null;
+      return stream("TPB", t.name, quality(t.name), num(t.seeders), t.info_hash, null, size, num(t.leechers));
+    }).filter(Boolean);
+    console.log(`[TPB] ${out.length}`);
+    return out;
   });
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-// 4. Knaben API — agregador JSON público, excelente de servidor
+// 4. Knaben — agregador POST JSON
 // ══════════════════════════════════════════════════════════════════════════════
-async function scrapeKnaben(query) {
+async function knaben(query) {
   try {
-    const url = `https://api.knaben.eu/v1`;
-    const { data } = await httpJson.post(url, {
-      search_type: "torrent",
-      search_field: "title",
-      query,
-      size: 20,
-      from: 0,
-      orderBy: "seeders",
-      orderDirection: "desc",
+    const { data } = await http.post("https://api.knaben.eu/v1", {
+      search_type: "torrent", search_field: "title",
+      query, size: 20, from: 0, orderBy: "seeders", orderDirection: "desc",
     });
     if (!data?.hits?.length) return [];
-    const streams = data.hits.slice(0, 15).map(t => {
-      const hash = t.hash || hashFromMagnet(t.magnet);
-      return makeStream({
-        source:   "Knaben",
-        title:    t.title,
-        quality:  extractQuality(t.title),
-        codec:    extractCodec(t.title),
-        audio:    extractAudio(t.title),
-        seeders:  t.seeders || 0,
-        leechers: t.leechers || 0,
-        infoHash: hash,
-        magnet:   t.magnet || null,
-        size: t.bytes ? `${(t.bytes / 1e9).toFixed(2)} GB` : null,
-      });
-    }).filter(s => s.infoHash || s.magnet);
-    console.log(`[Knaben] ${streams.length}`);
-    return streams;
-  } catch (e) {
-    console.warn(`[Knaben] ${e.message}`);
-    return [];
-  }
+    const out = data.hits.slice(0,15).map(t => {
+      const h = validHash(t.hash) || validHash(hashFromMagnet(t.magnet));
+      const size = t.bytes ? `${(t.bytes/1e9).toFixed(2)} GB` : null;
+      return stream("Knaben", t.title, quality(t.title), t.seeders||0, h, t.magnet||null, size, t.leechers||0);
+    }).filter(Boolean);
+    console.log(`[Knaben] ${out.length}`);
+    return out;
+  } catch(e) { console.warn(`[Knaben] ${e.message}`); return []; }
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-// 5. Torrents.csv — API REST pública, sem bloqueio
+// 5. Torrents.csv — API REST pública
 // ══════════════════════════════════════════════════════════════════════════════
-async function scrapeTorrentsCsv(query) {
-  const mirrors = [
+async function torrentsCsv(query) {
+  return mirrors([
     "https://torrents-csv.com",
     "https://torrents-csv.ml",
-  ];
-  return tryMirrors(mirrors, async (base) => {
-    const { data } = await httpJson.get(
-      `${base}/service/search?q=${encodeURIComponent(query)}&size=15&type=torrent`
-    );
-    const list = data?.torrents || data?.results || (Array.isArray(data) ? data : []);
+  ], async base => {
+    const { data } = await http.get(`${base}/service/search?q=${encodeURIComponent(query)}&size=15&type=torrent`);
+    const list = data?.torrents || (Array.isArray(data) ? data : []);
     if (!list.length) return [];
-    const streams = list.slice(0, 15).map(t => makeStream({
-      source:   "TorrCSV",
-      title:    t.name,
-      quality:  extractQuality(t.name),
-      codec:    extractCodec(t.name),
-      audio:    extractAudio(t.name),
-      seeders:  t.seeders || 0,
-      leechers: t.leechers || 0,
-      infoHash: t.infohash || t.hash,
-      size: t.size_bytes ? `${(t.size_bytes / 1e9).toFixed(2)} GB` : null,
-    })).filter(s => s.infoHash);
-    console.log(`[TorrCSV] ${streams.length}`);
-    return streams;
+    const out = list.slice(0,15).map(t => {
+      const size = t.size_bytes ? `${(t.size_bytes/1e9).toFixed(2)} GB` : null;
+      return stream("TorrCSV", t.name, quality(t.name), t.seeders||0, t.infohash||t.hash, null, size, t.leechers||0);
+    }).filter(Boolean);
+    console.log(`[TorrCSV] ${out.length}`);
+    return out;
   });
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-// 6. Bitsearch.to — API JSON pública
+// 6. Bitsearch — API JSON
 // ══════════════════════════════════════════════════════════════════════════════
-async function scrapeBitsearch(query) {
+async function bitsearch(query) {
   try {
-    const { data } = await httpJson.get(
-      `https://bitsearch.to/api/v1/search?q=${encodeURIComponent(query)}&category=1&sort=seeders`
-    );
+    const { data } = await http.get(`https://bitsearch.to/api/v1/search?q=${encodeURIComponent(query)}&category=1&sort=seeders`);
     const list = data?.results || data?.data || [];
     if (!list.length) return [];
-    const streams = list.slice(0, 15).map(t => {
-      const hash = t.infoHash || t.hash || hashFromMagnet(t.magnet);
-      return makeStream({
-        source:   "Bitsearch",
-        title:    t.name || t.title,
-        quality:  extractQuality(t.name || t.title),
-        codec:    extractCodec(t.name || t.title),
-        audio:    extractAudio(t.name || t.title),
-        seeders:  t.stats?.seeders || t.seeders || 0,
-        leechers: t.stats?.leechers || t.leechers || 0,
-        infoHash: hash,
-        size: t.stats?.size || t.size || null,
-      });
-    }).filter(s => s.infoHash);
-    console.log(`[Bitsearch] ${streams.length}`);
-    return streams;
-  } catch (e) {
-    console.warn(`[Bitsearch] ${e.message}`);
-    return [];
-  }
+    const out = list.slice(0,15).map(t => {
+      const name = t.name || t.title || "";
+      const h = validHash(t.infoHash || t.hash) || validHash(hashFromMagnet(t.magnet));
+      return stream("Bitsearch", name, quality(name), t.stats?.seeders||t.seeders||0, h, t.magnet||null, t.stats?.size||t.size||null, t.stats?.leechers||t.leechers||0);
+    }).filter(Boolean);
+    console.log(`[Bitsearch] ${out.length}`);
+    return out;
+  } catch(e) { console.warn(`[Bitsearch] ${e.message}`); return []; }
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
 // 7. Solidtorrents — API JSON
 // ══════════════════════════════════════════════════════════════════════════════
-async function scrapeSolidtorrents(query) {
-  const mirrors = [
+async function solid(query) {
+  return mirrors([
     "https://solidtorrents.to",
     "https://solidtorrents.eu",
     "https://solidtorrents.net",
-  ];
-  return tryMirrors(mirrors, async (base) => {
-    const { data } = await httpJson.get(
-      `${base}/api/v1/search?q=${encodeURIComponent(query)}&category=video&sort=seeders`
-    );
-    const list = data?.results || [];
-    if (!list.length) return [];
-    const streams = list.slice(0, 15).map(t => makeStream({
-      source:   "Solid",
-      title:    t.title,
-      quality:  extractQuality(t.title),
-      codec:    extractCodec(t.title),
-      audio:    extractAudio(t.title),
-      seeders:  t.swarm?.seeders || 0,
-      leechers: t.swarm?.leechers || 0,
-      infoHash: t.infohash,
-      size: t.size || null,
-    })).filter(s => s.infoHash);
-    console.log(`[Solid] ${streams.length}`);
-    return streams;
+  ], async base => {
+    const { data } = await http.get(`${base}/api/v1/search?q=${encodeURIComponent(query)}&category=video&sort=seeders`);
+    if (!data?.results?.length) return [];
+    const out = data.results.slice(0,15).map(t => {
+      return stream("Solid", t.title, quality(t.title), t.swarm?.seeders||0, t.infohash, null, t.size||null, t.swarm?.leechers||0);
+    }).filter(Boolean);
+    console.log(`[Solid] ${out.length}`);
+    return out;
   });
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-// 8. TorrentGalaxy — HTML scraping com headers reais
+// 8. 1337x — HTML scraping
 // ══════════════════════════════════════════════════════════════════════════════
-async function scrapeTorrentGalaxy(query) {
-  const mirrors = [
-    "https://torrentgalaxy.one",
-    "https://torrentgalaxy.to",
-    "https://tgx.rs",
-    "https://torrentgalaxy.hair",
-    "https://torrentgalaxy-official.com",
-  ];
-  return tryMirrors(mirrors, async (base) => {
-    const { data } = await http.get(
-      `${base}/torrents.php?search=${encodeURIComponent(query)}&cat=0&sort=seeders&order=desc`,
-      { headers: { "Referer": base + "/", "X-Requested-With": "XMLHttpRequest" } }
-    );
-    const $ = cheerio.load(data);
-    const streams = [];
-    $(".tgxtablerow, tr.tgxtablerow").each((_, row) => {
-      const nameEl = $(row).find("a.txlight").first();
-      const name   = nameEl.text().trim();
-      if (!name) return;
-      const magnet = $(row).find('a[href^="magnet:"]').attr("href");
-      if (!magnet) return;
-      const seeders = parseNum($(row).find("span.seedsnum").text());
-      const size    = $(row).find("span.badge-secondary").first().text().trim();
-      streams.push(makeStream({
-        source: "TGX", title: name,
-        quality: extractQuality(name), codec: extractCodec(name), audio: extractAudio(name),
-        seeders, infoHash: hashFromMagnet(magnet), magnet, size,
-      }));
-    });
-    console.log(`[TGX] ${streams.length} em ${base}`);
-    return streams;
-  });
-}
-
-// ══════════════════════════════════════════════════════════════════════════════
-// 9. 1337x — HTML scraping
-// ══════════════════════════════════════════════════════════════════════════════
-async function scrape1337x(query) {
-  const mirrors = [
-    "https://1337x.to",
-    "https://1337x.st",
-    "https://1337x.gd",
-    "https://x1337x.ws",
-  ];
-  return tryMirrors(mirrors, async (base) => {
-    const { data } = await http.get(
-      `${base}/search/${encodeURIComponent(query)}/1/`,
-      { headers: { "Referer": base + "/" } }
-    );
+async function x1337(query) {
+  return mirrors(["https://1337x.to","https://1337x.st","https://x1337x.ws"], async base => {
+    const { data } = await http.get(`${base}/search/${encodeURIComponent(query)}/1/`);
     const $ = cheerio.load(data);
     const rows = $("table.table-list tbody tr").toArray();
     if (!rows.length) return [];
 
-    const items = rows.slice(0, 8).map(row => ({
-      href:    base + ($(row).find("td.name a").eq(1).attr("href") || ""),
-      name:    $(row).find("td.name a").eq(1).text().trim(),
-      seeders: parseNum($(row).find("td.seeds").text()),
-      size:    $(row).find("td.size").text().trim().split("\n")[0],
+    const items = rows.slice(0,8).map(r => ({
+      href:  base + ($(r).find("td.name a").eq(1).attr("href")||""),
+      name:  $(r).find("td.name a").eq(1).text().trim(),
+      seeds: num($(r).find("td.seeds").text()),
+      size:  $(r).find("td.size").text().trim().split("\n")[0],
     })).filter(i => i.href !== base && i.name);
 
-    const streams = (await Promise.all(items.map(async item => {
+    const out = (await Promise.all(items.map(async i => {
       try {
-        const { data: d } = await http.get(item.href, { headers: { "Referer": base + "/" } });
-        const $d  = cheerio.load(d);
-        const mag = $d('a[href^="magnet:"]').attr("href");
-        if (!mag) return null;
-        return makeStream({
-          source: "1337x", title: item.name,
-          quality: extractQuality(item.name), codec: extractCodec(item.name), audio: extractAudio(item.name),
-          seeders: item.seeders, infoHash: hashFromMagnet(mag), magnet: mag, size: item.size,
-        });
-      } catch { return null; }
-    }))).filter(Boolean);
-
-    console.log(`[1337x] ${streams.length}`);
-    return streams;
-  });
-}
-
-// ══════════════════════════════════════════════════════════════════════════════
-// 10. LimeTorrents — HTML
-// ══════════════════════════════════════════════════════════════════════════════
-async function scrapeLimeTorrents(query) {
-  const mirrors = [
-    "https://www.limetorrents.lol",
-    "https://limetorrents.info",
-    "https://limetor.com",
-    "https://limetorrents.fun",
-  ];
-  return tryMirrors(mirrors, async (base) => {
-    const { data } = await http.get(
-      `${base}/search/all/${encodeURIComponent(query)}/seeds/1/`
-    );
-    const $ = cheerio.load(data);
-    const streams = [];
-    $("table.table2 tbody tr").slice(0, 10).each((_, row) => {
-      const name   = $(row).find("td a").eq(1).text().trim() || $(row).find("td a").first().text().trim();
-      const magnet = $(row).find('a[href^="magnet:"]').attr("href");
-      if (!name || !magnet) return;
-      const seeders = parseNum($(row).find("td.tdseed").text());
-      const size    = $(row).find("td:nth-child(3)").text().trim();
-      streams.push(makeStream({
-        source: "Lime", title: name,
-        quality: extractQuality(name), codec: extractCodec(name), audio: extractAudio(name),
-        seeders, infoHash: hashFromMagnet(magnet), magnet, size,
-      }));
-    });
-    console.log(`[Lime] ${streams.length}`);
-    return streams;
-  });
-}
-
-// ══════════════════════════════════════════════════════════════════════════════
-// 11. Nyaa.si — HTML (anime)
-// ══════════════════════════════════════════════════════════════════════════════
-async function scrapeNyaa(query) {
-  try {
-    const { data } = await http.get(
-      `https://nyaa.si/?f=0&c=0_0&q=${encodeURIComponent(query)}&s=seeders&o=desc`
-    );
-    const $ = cheerio.load(data);
-    const streams = [];
-    $("table tbody tr").slice(0, 10).each((_, row) => {
-      const name   = $(row).find("td:nth-child(2) a").last().text().trim();
-      const magnet = $(row).find('a[href^="magnet:"]').attr("href");
-      if (!name || !magnet) return;
-      streams.push(makeStream({
-        source: "Nyaa", title: name,
-        quality: extractQuality(name), codec: extractCodec(name), audio: extractAudio(name),
-        seeders: parseNum($(row).find("td:nth-child(6)").text()),
-        infoHash: hashFromMagnet(magnet), magnet,
-        size: $(row).find("td:nth-child(4)").text().trim(),
-      }));
-    });
-    console.log(`[Nyaa] ${streams.length}`);
-    return streams;
-  } catch (e) { console.warn(`[Nyaa] ${e.message}`); return []; }
-}
-
-// ══════════════════════════════════════════════════════════════════════════════
-// 12. Snowfl — JSON API agregadora
-// ══════════════════════════════════════════════════════════════════════════════
-async function scrapeSnowfl(query) {
-  try {
-    const { data } = await httpJson.get(
-      `https://snowfl.com/b.json?q=${encodeURIComponent(query)}&p=0&s=SEED&t=VIDEO&hideXXX=1`
-    );
-    const list = Array.isArray(data) ? data : (data?.results || []);
-    if (!list.length) return [];
-    const streams = list.slice(0, 15).map(t => {
-      const hash = t.hash || t.infohash;
-      return makeStream({
-        source:   "Snowfl",
-        title:    t.title || t.name,
-        quality:  extractQuality(t.title || t.name),
-        codec:    extractCodec(t.title || t.name),
-        audio:    extractAudio(t.title || t.name),
-        seeders:  t.seeder || t.seeders || 0,
-        leechers: t.leech  || t.leechers || 0,
-        infoHash: hash,
-        magnet:   hash ? buildMagnet(hash, t.title) : null,
-        size:     t.size || null,
-      });
-    }).filter(s => s.infoHash);
-    console.log(`[Snowfl] ${streams.length}`);
-    return streams;
-  } catch (e) { console.warn(`[Snowfl] ${e.message}`); return []; }
-}
-
-// ══════════════════════════════════════════════════════════════════════════════
-// 13. RuTracker — HTML
-// ══════════════════════════════════════════════════════════════════════════════
-async function scrapeRuTracker(query) {
-  try {
-    const { data } = await http.get(
-      `https://rutracker.org/forum/tracker.php?nm=${encodeURIComponent(query)}`,
-      { headers: { "Cookie": "bb_dl=1; bb_ssl=1; bb_session=0" } }
-    );
-    const $ = cheerio.load(data);
-    const items = [];
-    $("table#search-results tbody tr").slice(0, 6).each((_, row) => {
-      const a    = $(row).find("td.t-title a.tLink");
-      const href = a.attr("href");
-      if (!href) return;
-      items.push({
-        href:    href.startsWith("http") ? href : `https://rutracker.org/forum/${href}`,
-        name:    a.text().trim(),
-        seeders: parseNum($(row).find("td.seedmed b").text()),
-        size:    $(row).find("td.tor-size").text().trim(),
-      });
-    });
-    const streams = (await Promise.all(items.slice(0, 4).map(async item => {
-      try {
-        const { data: d } = await http.get(item.href);
-        const mag = cheerio.load(d)('a.magnet-link[href^="magnet:"]').attr("href");
-        if (!mag) return null;
-        return makeStream({
-          source: "RuTrk", title: item.name,
-          quality: extractQuality(item.name), codec: extractCodec(item.name), audio: extractAudio(item.name),
-          seeders: item.seeders, infoHash: hashFromMagnet(mag), magnet: mag, size: item.size,
-        });
-      } catch { return null; }
-    }))).filter(Boolean);
-    console.log(`[RuTrk] ${streams.length}`);
-    return streams;
-  } catch (e) { console.warn(`[RuTrk] ${e.message}`); return []; }
-}
-
-
-// ══════════════════════════════════════════════════════════════════════════════
-// 14. EXT.to — novo indexador JSON, substituto do TorrentGalaxy
-// ══════════════════════════════════════════════════════════════════════════════
-async function scrapeEXT(query) {
-  try {
-    const { data } = await httpJson.get(
-      `https://ext.to/api/v1/search?q=${encodeURIComponent(query)}&sort=seeders&order=desc`
-    );
-    const list = data?.results || data?.torrents || (Array.isArray(data) ? data : []);
-    if (!list.length) return [];
-    const streams = list.slice(0, 15).map(t => {
-      const hash = t.hash || t.infohash || t.info_hash || hashFromMagnet(t.magnet);
-      return makeStream({
-        source:   "EXT",
-        title:    t.name || t.title,
-        quality:  extractQuality(t.name || t.title),
-        codec:    extractCodec(t.name || t.title),
-        audio:    extractAudio(t.name || t.title),
-        seeders:  t.seeders || t.seeds || 0,
-        leechers: t.leechers || t.peers || 0,
-        infoHash: hash,
-        magnet:   t.magnet || (hash ? buildMagnet(hash, t.name) : null),
-        size:     t.size || null,
-      });
-    }).filter(s => s.infoHash || s.magnet);
-    console.log(`[EXT] ${streams.length}`);
-    return streams;
-  } catch (e) { console.warn(`[EXT] ${e.message}`); return []; }
-}
-
-// ══════════════════════════════════════════════════════════════════════════════
-// 15. RARGB (rargb.to) — clone pós-shutdown do RARBG original
-// ══════════════════════════════════════════════════════════════════════════════
-async function scrapeRARGB(query) {
-  const mirrors = [
-    "https://rargb.to",
-    "https://www.rargb.to",
-    "https://rarbg.to",
-  ];
-  return tryMirrors(mirrors, async (base) => {
-    const { data } = await http.get(
-      `${base}/search/?search=${encodeURIComponent(query)}&order=seeders&by=DESC`,
-      { headers: { "Referer": base + "/" } }
-    );
-    const $ = cheerio.load(data);
-    const streams = [];
-    $("tr.lista2").slice(0, 12).each((_, row) => {
-      const nameEl = $(row).find("td:nth-child(2) a");
-      const name   = nameEl.text().trim();
-      const magnet = $(row).find('a[href^="magnet:"]').attr("href");
-      if (!name || !magnet) return;
-      const seeders = parseNum($(row).find("td:nth-child(6)").text());
-      const size    = $(row).find("td:nth-child(4)").text().trim();
-      streams.push(makeStream({
-        source: "RARGB", title: name,
-        quality: extractQuality(name), codec: extractCodec(name), audio: extractAudio(name),
-        seeders, infoHash: hashFromMagnet(magnet), magnet, size,
-      }));
-    });
-    console.log(`[RARGB] ${streams.length}`);
-    return streams;
-  });
-}
-
-// ══════════════════════════════════════════════════════════════════════════════
-// 16. Torlock — torrents verificados, sem fakes
-// ══════════════════════════════════════════════════════════════════════════════
-async function scrapeTorlock(query) {
-  const mirrors = [
-    "https://www.torlock.com",
-    "https://torlock2.com",
-  ];
-  return tryMirrors(mirrors, async (base) => {
-    const { data } = await http.get(
-      `${base}/all/torrents/${encodeURIComponent(query)}.html?sort=seeds`
-    );
-    const $ = cheerio.load(data);
-    const items = [];
-    $("table.table tbody tr").slice(0, 8).each((_, row) => {
-      const a    = $(row).find("td a.n").first();
-      const href = a.attr("href");
-      if (!href) return;
-      items.push({
-        href:    `${base}${href}`,
-        name:    a.text().trim(),
-        seeders: parseNum($(row).find("td.tds").text()),
-        size:    $(row).find("td.tds1").text().trim(),
-      });
-    });
-    const streams = (await Promise.all(items.slice(0, 5).map(async item => {
-      try {
-        const { data: d } = await http.get(item.href, { headers: { "Referer": base + "/" } });
+        const { data: d } = await http.get(i.href);
         const mag = cheerio.load(d)('a[href^="magnet:"]').attr("href");
         if (!mag) return null;
-        return makeStream({
-          source: "Torlock", title: item.name,
-          quality: extractQuality(item.name), codec: extractCodec(item.name), audio: extractAudio(item.name),
-          seeders: item.seeders, infoHash: hashFromMagnet(mag), magnet: mag, size: item.size,
-        });
+        return stream("1337x", i.name, quality(i.name), i.seeds, null, mag, i.size);
       } catch { return null; }
     }))).filter(Boolean);
-    console.log(`[Torlock] ${streams.length}`);
-    return streams;
+
+    console.log(`[1337x] ${out.length}`);
+    return out;
   });
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-// 17. SpeedTorrent — site brasileiro de torrents
+// 9. TorrentGalaxy — HTML scraping
 // ══════════════════════════════════════════════════════════════════════════════
-async function scrapeSpeedTorrent(query) {
-  const mirrors = [
-    "https://www.speedtorrent.app",
-    "https://speedtorrent.net",
-  ];
-  return tryMirrors(mirrors, async (base) => {
-    const { data } = await http.get(
-      `${base}/busca/${encodeURIComponent(query)}`
-    );
+async function tgx(query) {
+  return mirrors([
+    "https://torrentgalaxy.one",
+    "https://torrentgalaxy.to",
+    "https://tgx.rs",
+  ], async base => {
+    const { data } = await http.get(`${base}/torrents.php?search=${encodeURIComponent(query)}&sort=seeders&order=desc`);
     const $ = cheerio.load(data);
-    const streams = [];
-    $(".torrent-item, .result-item, tr.torrent").slice(0, 10).each((_, el) => {
-      const magnet = $(el).find('a[href^="magnet:"]').attr("href");
-      const name   = $(el).find(".torrent-name, .name, td a").first().text().trim();
-      if (!magnet || !name) return;
-      const seeders = parseNum($(el).find(".seeds, .seeders").text());
-      const size    = $(el).find(".size").text().trim();
-      streams.push(makeStream({
-        source: "SpeedTR", title: name,
-        quality: extractQuality(name), codec: extractCodec(name), audio: extractAudio(name),
-        seeders, infoHash: hashFromMagnet(magnet), magnet, size,
-      }));
+    const out = [];
+    $(".tgxtablerow").each((_, r) => {
+      const name = $(r).find("a.txlight").first().text().trim();
+      const mag  = $(r).find('a[href^="magnet:"]').attr("href");
+      if (!name || !mag) return;
+      const s = stream("TGX", name, quality(name), num($(r).find("span.seedsnum").text()), null, mag,
+        $(r).find("span.badge-secondary").first().text().trim());
+      if (s) out.push(s);
     });
-    console.log(`[SpeedTR] ${streams.length}`);
-    return streams;
+    console.log(`[TGX] ${out.length}`);
+    return out;
   });
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-// 18. TorrentDownloads — grande acervo geral
+// 10. LimeTorrents — HTML scraping
 // ══════════════════════════════════════════════════════════════════════════════
-async function scrapeTorrentDownloads(query) {
+async function lime(query) {
+  return mirrors([
+    "https://www.limetorrents.lol",
+    "https://limetor.com",
+    "https://limetorrents.info",
+  ], async base => {
+    const { data } = await http.get(`${base}/search/all/${encodeURIComponent(query)}/seeds/1/`);
+    const $ = cheerio.load(data);
+    const out = [];
+    $("table.table2 tbody tr").slice(0,10).each((_, r) => {
+      const name = $(r).find("td a").eq(1).text().trim() || $(r).find("td a").first().text().trim();
+      const mag  = $(r).find('a[href^="magnet:"]').attr("href");
+      if (!name || !mag) return;
+      const s = stream("Lime", name, quality(name), num($(r).find("td.tdseed").text()), null, mag,
+        $(r).find("td:nth-child(3)").text().trim());
+      if (s) out.push(s);
+    });
+    console.log(`[Lime] ${out.length}`);
+    return out;
+  });
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// 11. Nyaa — HTML scraping (anime)
+// ══════════════════════════════════════════════════════════════════════════════
+async function nyaa(query) {
   try {
-    const { data } = await http.get(
-      `https://www.torrentdownloads.pro/search/?search=${encodeURIComponent(query)}`
-    );
+    const { data } = await http.get(`https://nyaa.si/?f=0&c=0_0&q=${encodeURIComponent(query)}&s=seeders&o=desc`);
     const $ = cheerio.load(data);
-    const links = [];
-    $(".tor_row .tor_title a, .torrents_table a.title").slice(0, 8).each((_, el) => {
-      const href = $(el).attr("href");
-      if (href) links.push({ href: "https://www.torrentdownloads.pro" + href, name: $(el).text().trim() });
+    const out = [];
+    $("table tbody tr").slice(0,10).each((_, r) => {
+      const name = $(r).find("td:nth-child(2) a").last().text().trim();
+      const mag  = $(r).find('a[href^="magnet:"]').attr("href");
+      if (!name || !mag) return;
+      const s = stream("Nyaa", name, quality(name), num($(r).find("td:nth-child(6)").text()), null, mag,
+        $(r).find("td:nth-child(4)").text().trim());
+      if (s) out.push(s);
     });
-    const streams = (await Promise.all(links.map(async item => {
-      try {
-        const { data: d } = await http.get(item.href);
-        const $d   = cheerio.load(d);
-        const mag  = $d('a[href^="magnet:"]').attr("href");
-        if (!mag) return null;
-        return makeStream({
-          source: "TDL", title: item.name,
-          quality: extractQuality(item.name), codec: extractCodec(item.name), audio: extractAudio(item.name),
-          seeders: parseNum($d(".seeds, .tseed").first().text()),
-          infoHash: hashFromMagnet(mag), magnet: mag,
-          size: $d(".cate_size, .tsize").first().text().trim(),
-        });
-      } catch { return null; }
-    }))).filter(Boolean);
-    console.log(`[TDL] ${streams.length}`);
-    return streams;
-  } catch (e) { console.warn(`[TDL] ${e.message}`); return []; }
+    console.log(`[Nyaa] ${out.length}`);
+    return out;
+  } catch(e) { console.warn(`[Nyaa] ${e.message}`); return []; }
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-// 19. Kickass Torrents — clássico
+// RESOLVE TITLE — Cinemeta (Stremio) → OMDB fallback
 // ══════════════════════════════════════════════════════════════════════════════
-async function scrapeKickass(query) {
-  const mirrors = [
-    "https://kickasstorrents.to",
-    "https://katcr.to",
-    "https://kickass.cm",
+async function resolveTitle(imdbId, type) {
+  const cineUrls = [
+    `https://v3-cinemeta.strem.io/meta/${type}/${imdbId}.json`,
+    `https://v3-cinemeta.strem.io/meta/movie/${imdbId}.json`,
+    `https://v3-cinemeta.strem.io/meta/series/${imdbId}.json`,
   ];
-  return tryMirrors(mirrors, async (base) => {
-    const { data } = await http.get(`${base}/usearch/${encodeURIComponent(query)}/`);
-    const $ = cheerio.load(data);
-    const streams = [];
-    $("tr.odd, tr.even").slice(0, 10).each((_, row) => {
-      const magnet  = $(row).find('a[href^="magnet:"]').attr("href");
-      if (!magnet) return;
-      const name    = $(row).find("a.cellMainLink").text().trim();
-      const seeders = parseNum($(row).find("td.green").first().text());
-      const size    = $(row).find("td.nobr").first().text().trim();
-      streams.push(makeStream({
-        source: "KAT", title: name,
-        quality: extractQuality(name), codec: extractCodec(name), audio: extractAudio(name),
-        seeders, leechers: parseNum($(row).find("td.red").first().text()),
-        infoHash: hashFromMagnet(magnet), magnet, size,
-      }));
-    });
-    console.log(`[KAT] ${streams.length}`);
-    return streams;
-  });
-}
-
-// ══════════════════════════════════════════════════════════════════════════════
-// 20. Zooqle — bom acervo de filmes/séries
-// ══════════════════════════════════════════════════════════════════════════════
-async function scrapeZooqle(query) {
-  try {
-    const { data } = await http.get(
-      `https://zooqle.com/search?q=${encodeURIComponent(query)}&s=ns&v=t&sd=d&fmt=rss`
-    );
-    const $ = cheerio.load(data, { xmlMode: true });
-    const streams = [];
-    $("item").slice(0, 12).each((_, el) => {
-      const name   = $(el).find("title").text().trim();
-      const magnet = $(el).find("torrent\:magnetURI, magnetURI").text().trim()
-                  || $(el).find("link").text().trim();
-      if (!name) return;
-      const seeders = parseNum($(el).find("torrent\:seeds, seeds").text());
-      const size    = $(el).find("torrent\:contentLength, contentLength").text().trim();
-      const sizeGB  = size ? `${(parseInt(size) / 1e9).toFixed(2)} GB` : null;
-      if (!magnet || !magnet.startsWith("magnet:")) return;
-      streams.push(makeStream({
-        source: "Zooqle", title: name,
-        quality: extractQuality(name), codec: extractCodec(name), audio: extractAudio(name),
-        seeders, infoHash: hashFromMagnet(magnet), magnet, size: sizeGB,
-      }));
-    });
-    console.log(`[Zooqle] ${streams.length}`);
-    return streams;
-  } catch (e) { console.warn(`[Zooqle] ${e.message}`); return []; }
+  for (const url of cineUrls) {
+    try {
+      const { data } = await http.get(url);
+      if (data?.meta?.name) return { title: data.meta.name, year: String(data.meta.year||"") };
+    } catch {}
+  }
+  for (const key of ["b7c56d5e","f1b47d65","a77b3ead"]) {
+    try {
+      const { data } = await http.get(`https://www.omdbapi.com/?i=${imdbId}&apikey=${key}`);
+      if (data?.Title) return { title: data.Title, year: data.Year?.split("–")[0]||"" };
+    } catch {}
+  }
+  return { title: imdbId, year: "" };
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
 // MASTER
 // ══════════════════════════════════════════════════════════════════════════════
-async function resolveTitle(imdbId) {
-  const keys   = ["b7c56d5e", "f1b47d65", "a77b3ead"];
-  const mirrors = [
-    `https://v3-cinemeta.strem.io/meta/movie/${imdbId}.json`,
-    `https://v3-cinemeta.strem.io/meta/series/${imdbId}.json`,
-  ];
-
-  // Try Cinemeta first (Stremio's own metadata — very reliable from servers)
-  for (const url of mirrors) {
-    try {
-      const { data } = await httpJson.get(url);
-      if (data?.meta?.name) {
-        return { title: data.meta.name, year: data.meta.year ? String(data.meta.year) : "" };
-      }
-    } catch { continue; }
-  }
-
-  // Fallback: OMDB
-  for (const key of keys) {
-    try {
-      const { data } = await httpJson.get(`https://www.omdbapi.com/?i=${imdbId}&apikey=${key}`);
-      if (data?.Title) return { title: data.Title, year: data.Year?.split("–")[0] || "" };
-    } catch { continue; }
-  }
-
-  return { title: imdbId, year: "" };
-}
-
 async function scrapeAll(imdbId, isSeries, season, episode) {
-  const { title, year } = await resolveTitle(imdbId);
+  const type = isSeries ? "series" : "movie";
+  const { title, year } = await resolveTitle(imdbId, type);
 
   const query = isSeries
-    ? `${title} S${String(season).padStart(2, "0")}E${String(episode).padStart(2, "0")}`
+    ? `${title} S${String(season).padStart(2,"0")}E${String(episode).padStart(2,"0")}`
     : `${title} ${year}`.trim();
 
-  console.log(`\n[Hookline] "${query}" | ${imdbId}`);
+  console.log(`\n[Phantom] "${query}" | ${imdbId}`);
 
-  const tasks = [
-    // ── APIs JSON (mais confiáveis de servidor) ───────────────────────
-    isSeries ? scrapeEZTV(imdbId, season, episode) : scrapeYTS(imdbId),
-    scrapePirateBay(query),
-    scrapeKnaben(query),
-    scrapeTorrentsCsv(query),
-    scrapeBitsearch(query),
-    scrapeSolidtorrents(query),
-    scrapeSnowfl(query),
-    scrapeEXT(query),
-    // ── HTML scrapers ─────────────────────────────────────────────────
-    scrapeTorrentGalaxy(query),
-    scrape1337x(query),
-    scrapeLimeTorrents(query),
-    scrapeNyaa(query),
-    scrapeRuTracker(query),
-    scrapeRARGB(query),
-    scrapeTorlock(query),
-    scrapeSpeedTorrent(query),
-    scrapeTorrentDownloads(query),
-    scrapeKickass(query),
-    scrapeZooqle(query),
-  ];
+  const tasks = isSeries
+    ? [ eztv(imdbId, season, episode), tpb(query), knaben(query), torrentsCsv(query),
+        bitsearch(query), x1337(query), lime(query), nyaa(query) ]
+    : [ yts(imdbId), tpb(query), knaben(query), torrentsCsv(query),
+        bitsearch(query), solid(query), x1337(query), tgx(query), lime(query), nyaa(query) ];
 
   const results = await Promise.allSettled(tasks);
   return results.flatMap(r => r.status === "fulfilled" ? r.value : []);

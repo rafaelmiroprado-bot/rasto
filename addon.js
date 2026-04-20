@@ -5,10 +5,10 @@ const scrapers = require("./scrapers");
 const BASE_URL = process.env.ADDON_BASE_URL || "http://localhost:7000";
 
 const manifest = {
-  id: "br.stremio.hookline",
+  id: "br.stremio.phantom",
   version: "1.0.0",
-  name: "Hookline",
-  description: "Find streams from multiple sources for movies and series.",
+  name: "Phantom",
+  description: "Streams from the shadows. from multiple sources for movies and series.",
   logo:       `${BASE_URL}/logo.svg`,
   background: `${BASE_URL}/logo.svg`,
   resources: ["stream"],
@@ -24,7 +24,7 @@ const manifest = {
 const builder = new addonBuilder(manifest);
 
 builder.defineStreamHandler(async ({ type, id }) => {
-  console.log(`\n[Hookline] Requisição: type=${type} id=${id}`);
+  console.log(`\n[Phantom] Requisição: type=${type} id=${id}`);
 
   const parts    = id.split(":");
   const imdbId   = parts[0];
@@ -36,10 +36,10 @@ builder.defineStreamHandler(async ({ type, id }) => {
   try {
     raw = await scrapers.scrapeAll(imdbId, isSeries, season, episode);
   } catch (err) {
-    console.error("[Hookline] Erro no scrapeAll:", err.message);
+    console.error("[Phantom] Erro no scrapeAll:", err.message);
   }
 
-  console.log(`[Hookline] Raw streams recebidos: ${raw.length}`);
+  console.log(`[Phantom] Raw streams recebidos: ${raw.length}`);
 
   // Validação — Stremio exige infoHash hex-40, hex-32 ou base32-32
   const HEX40 = /^[a-fA-F0-9]{40}$/;
@@ -55,7 +55,7 @@ builder.defineStreamHandler(async ({ type, id }) => {
     return false;
   });
 
-  console.log(`[Hookline] Streams válidos: ${valid.length}`);
+  console.log(`[Phantom] Streams válidos: ${valid.length}`);
 
   // Deduplicar por infoHash
   const seen   = new Set();
@@ -79,8 +79,8 @@ builder.defineStreamHandler(async ({ type, id }) => {
   // Limpar campos internos
   const streams = unique.map(({ _quality, _seeders, ...rest }) => rest);
 
-  console.log(`[Hookline] Enviando ${streams.length} streams`);
-  if (streams[0]) console.log(`[Hookline] Exemplo:`, JSON.stringify(streams[0]).slice(0, 200));
+  console.log(`[Phantom] Enviando ${streams.length} streams`);
+  if (streams[0]) console.log(`[Phantom] Exemplo:`, JSON.stringify(streams[0]).slice(0, 200));
 
   return { streams };
 });

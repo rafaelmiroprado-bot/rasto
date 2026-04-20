@@ -24,7 +24,7 @@ app.get("/logo.svg", (req, res) => {
 
 // Health check
 app.get("/health", (req, res) => {
-  res.json({ status: "ok", name: "Hookline", baseUrl: process.env.ADDON_BASE_URL, time: new Date().toISOString() });
+  res.json({ status: "ok", name: "Phantom", baseUrl: process.env.ADDON_BASE_URL, time: new Date().toISOString() });
 });
 
 // Test endpoint
@@ -58,8 +58,8 @@ app.get("*", (req, res) => {
 const PORT = process.env.PORT || 7000;
 app.listen(PORT, "0.0.0.0", () => {
   const base = process.env.ADDON_BASE_URL || `http://localhost:${PORT}`;
-  console.log(`[Hookline] Running at ${base}`);
-  console.log(`[Hookline] Logo:     ${base}/logo.svg`);
-  console.log(`[Hookline] Manifest: ${base}/manifest.json`);
-  console.log(`[Hookline] Test:     ${base}/test`);
+  console.log(`[Phantom] Running at ${base}`);
+  console.log(`[Phantom] Logo:     ${base}/logo.svg`);
+  console.log(`[Phantom] Manifest: ${base}/manifest.json`);
+  console.log(`[Phantom] Test:     ${base}/test`);
 });

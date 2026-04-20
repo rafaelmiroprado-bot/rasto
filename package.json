@@ -1,5 +1,5 @@
 {
-  "name": "hookline",
+  "name": "phantom",
   "version": "1.0.0",
   "description": "Stremio addon that finds streams from multiple sources",
   "main": "server.js",
